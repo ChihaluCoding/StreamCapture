@@ -14,17 +14,13 @@
 - **柔軟な設定**: 画質、再接続回数、待機間隔など細かい設定が可能
 - **再接続機能**: 接続失敗時の自動再接続に対応
 
-## 必要な環境
+## 動作環境
 - Windows
 
 ### 2. 必要なツール
 
-ffmpeg
-
-**Windows:**
-```bash
-choco install ffmpeg
-```
+https://www.ffmpeg.org/download.html
+からWindows用のffmpegをダウンロードし、インストールしてください。インストール後、ffmpegのパスをシステム環境変数に追加してください。
 
 ### 基本的な操作
 

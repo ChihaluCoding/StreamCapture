@@ -905,9 +905,11 @@ class MainWindow(QtWidgets.QMainWindow):  # メインウィンドウ定義
         QtWidgets.QMessageBox.information(self, "情報", message)  # 情報ダイアログ表示
 # 区切り
     def _load_settings_to_ui(self) -> None:  # 設定の読み込み
-        self.preview_audio.setVolume(  # プレビュー音量の反映
-            load_setting_value("preview_volume", 0.5, float)  # 設定値取得
-        )  # 音量設定の終了
+        self.preview_volume = load_setting_value("preview_volume", 0.5, float)  # プレビュー音量を保持
+        for session in self.preview_sessions.values():  # 既存プレビューを更新
+            audio = session.get("audio")  # 音声出力を取得
+            if isinstance(audio, QtMultimedia.QAudioOutput):  # 音声出力がある場合
+                audio.setVolume(float(self.preview_volume))  # 音量を反映
 # 区切り
     def _open_settings_dialog(self) -> None:  # 設定ダイアログ表示
         dialog = SettingsDialog(self)  # 設定ダイアログ生成
@@ -915,6 +917,46 @@ class MainWindow(QtWidgets.QMainWindow):  # メインウィンドウ定義
             self._load_settings_to_ui()  # 設定を再読み込み
             self._configure_auto_monitor()  # 自動監視を再設定
             self._show_info("設定を更新しました。")  # 通知表示
+# 区切り
+    def _resolve_stream_url(self, url: str) -> Optional[str]:  # ストリームURLを解決
+        quality = load_setting_value("quality", DEFAULT_QUALITY, str)  # 設定から画質取得
+        http_timeout = load_setting_value("http_timeout", 20, int)  # 設定からHTTPタイムアウト取得
+        stream_timeout = load_setting_value("stream_timeout", 60, int)  # 設定からストリームタイムアウト取得
+        session = Streamlink()  # Streamlinkセッション生成
+        session.set_option("http-timeout", int(http_timeout))  # HTTPタイムアウト設定
+        session.set_option("stream-timeout", int(stream_timeout))  # ストリームタイムアウト設定
+        try:  # 例外処理開始
+            streams = session.streams(url)  # ストリーム一覧を取得
+        except StreamlinkError as exc:  # Streamlink例外を捕捉
+            self._append_log(f"プレビュー用ストリーム取得に失敗しました: {exc}")  # ログ出力
+            return None  # 失敗時はNone
+        if not streams:  # ストリームが空の場合
+            self._append_log("プレビュー用ストリームが見つかりませんでした。")  # ログ出力
+            return None  # 失敗時はNone
+        stream = select_stream(streams, quality or DEFAULT_QUALITY)  # ストリーム選択
+        if hasattr(stream, "to_url"):  # URL変換メソッドがある場合
+            return stream.to_url()  # URLを返却
+        if hasattr(stream, "url"):  # URL属性がある場合
+            return getattr(stream, "url")  # URLを返却
+        self._append_log("プレビューに対応したストリームURLを取得できませんでした。")  # ログ出力
+        return None  # 失敗時はNone
+# 区切り
+    def _get_current_preview_url(self) -> Optional[str]:  # 現在のプレビューURL取得
+        current_widget = self.preview_tabs.currentWidget()  # 現在のタブを取得
+        if current_widget is None:  # タブが無い場合
+            return None  # Noneを返却
+        value = current_widget.property("preview_url")  # URLプロパティ取得
+        return str(value) if value else None  # URLを返却
+# 区切り
+    def _on_preview_tab_close(self, index: int) -> None:  # タブのクローズ処理
+        widget = self.preview_tabs.widget(index)  # 対象タブを取得
+        if widget is None:  # タブが無い場合
+            return  # 何もしない
+        url = widget.property("preview_url")  # URLプロパティ取得
+        if isinstance(url, str) and url:  # URLがある場合
+            self._stop_preview_for_url(url, remove_tab=True)  # プレビュー停止
+        else:  # URLが無い場合
+            self.preview_tabs.removeTab(index)  # タブを削除
 # 区切り
     def _configure_auto_monitor(self) -> None:  # 自動監視の設定
         enabled = load_bool_setting("auto_enabled", DEFAULT_AUTO_ENABLED)  # 有効設定を取得
@@ -1051,7 +1093,12 @@ class MainWindow(QtWidgets.QMainWindow):  # メインウィンドウ定義
             "output_path": output_path,  # 出力パス参照
         }  # セッション保存の終了
         self._append_log(f"自動録画開始: {normalized_url} -> {output_path}")  # ログ出力
-        self._start_preview_for_url(normalized_url, update_input=True, reason="自動録画")  # 自動録画時のプレビュー開始
+        self._start_preview_for_url(  # 自動録画時のプレビュー開始
+            normalized_url,  # URL指定
+            update_input=False,  # 入力欄を更新しない
+            reason="自動録画",  # 理由指定
+            select_tab=False,  # タブを強制選択しない
+        )  # プレビュー開始の終了
         if not self.stop_button.isEnabled():  # 停止ボタンが無効の場合
             self.stop_button.setEnabled(True)  # 停止ボタンを有効化
 # 区切り
@@ -1087,51 +1134,80 @@ class MainWindow(QtWidgets.QMainWindow):  # メインウィンドウ定義
         if not url:  # URLが空の場合
             self._show_info("配信URLを入力してください。")  # 通知表示
             return  # 処理中断
-        self._start_preview_for_url(url, update_input=False, reason="手動")  # URL指定でプレビュー開始
+        self._start_preview_for_url(url, update_input=False, reason="手動", select_tab=True)  # URL指定でプレビュー開始
 # 区切り
-    def _start_preview_for_url(self, url: str, update_input: bool, reason: str) -> None:  # URL指定プレビュー開始
+    def _start_preview_for_url(self, url: str, update_input: bool, reason: str, select_tab: bool) -> None:  # URL指定プレビュー開始
         if update_input:  # 入力欄を更新する場合
             self.url_input.setText(url)  # URL入力欄を更新
-        quality = load_setting_value("quality", DEFAULT_QUALITY, str)  # 設定から画質取得
-        http_timeout = load_setting_value("http_timeout", 20, int)  # 設定からHTTPタイムアウト取得
-        stream_timeout = load_setting_value("stream_timeout", 60, int)  # 設定からストリームタイムアウト取得
-        session = Streamlink()  # Streamlinkセッション生成
-        session.set_option("http-timeout", int(http_timeout))  # HTTPタイムアウト設定
-        session.set_option("stream-timeout", int(stream_timeout))  # ストリームタイムアウト設定
-        try:  # 例外処理開始
-            streams = session.streams(url)  # ストリーム一覧を取得
-        except StreamlinkError as exc:  # Streamlink例外を捕捉
-            self._append_log(f"プレビュー用ストリーム取得に失敗しました: {exc}")  # ログ出力
-            return  # 処理中断
-        if not streams:  # ストリームが空の場合
-            self._append_log("プレビュー用ストリームが見つかりませんでした。")  # ログ出力
-            return  # 処理中断
-        stream = select_stream(streams, quality or DEFAULT_QUALITY)  # ストリーム選択
-        stream_url = None  # ストリームURL初期化
-        if hasattr(stream, "to_url"):  # URL変換メソッドがある場合
-            stream_url = stream.to_url()  # URLを取得
-        elif hasattr(stream, "url"):  # URL属性がある場合
-            stream_url = getattr(stream, "url")  # URLを取得
+        stream_url = self._resolve_stream_url(url)  # ストリームURLを取得
         if not stream_url:  # URLが取得できない場合
-            self._append_log("プレビューに対応したストリームURLを取得できませんでした。")  # ログ出力
             return  # 処理中断
-        if self.preview_player.playbackState() == QtMultimedia.QMediaPlayer.PlaybackState.PlayingState:  # 再生中判定
-            self.preview_player.stop()  # 既存プレビューを停止
-        self.preview_player.setSource(QtCore.QUrl(stream_url))  # プレイヤーにソース設定
-        self.preview_player.play()  # 再生開始
+        if url in self.preview_sessions:  # 既存プレビューがある場合
+            session = self.preview_sessions[url]  # セッションを取得
+            player = session["player"]  # プレイヤーを取得
+            if player.playbackState() == QtMultimedia.QMediaPlayer.PlaybackState.PlayingState:  # 再生中判定
+                player.stop()  # 既存プレビューを停止
+            player.setSource(QtCore.QUrl(stream_url))  # プレイヤーにソース設定
+            player.play()  # 再生開始
+            if select_tab:  # タブを選択する場合
+                self.preview_tabs.setCurrentWidget(session["widget"])  # 対象タブを選択
+            self.preview_button.setText("プレビュー停止")  # ボタン表示更新
+            self._append_log(f"プレビューを更新しました（{reason}）。")  # ログ出力
+            return  # 処理終了
+        audio = QtMultimedia.QAudioOutput(self)  # 音声出力を生成
+        player = QtMultimedia.QMediaPlayer(self)  # プレイヤーを生成
+        player.setAudioOutput(audio)  # 音声出力を関連付け
+        video = QtMultimediaWidgets.QVideoWidget()  # 映像表示を生成
+        player.setVideoOutput(video)  # 映像出力を関連付け
+        container = QtWidgets.QWidget()  # タブ用コンテナ
+        container_layout = QtWidgets.QVBoxLayout(container)  # コンテナレイアウト
+        container_layout.addWidget(video)  # 映像を配置
+        label = derive_channel_label(url)  # ラベルを生成
+        tab_index = self.preview_tabs.addTab(container, label)  # タブを追加
+        container.setProperty("preview_url", url)  # URLプロパティを保存
+        self.preview_sessions[url] = {  # セッションを保存
+            "player": player,  # プレイヤー参照
+            "audio": audio,  # 音声出力参照
+            "video": video,  # 映像参照
+            "widget": container,  # コンテナ参照
+            "tab_index": tab_index,  # タブインデックス
+        }  # セッション保存の終了
+        player.setSource(QtCore.QUrl(stream_url))  # プレイヤーにソース設定
+        player.play()  # 再生開始
+        if select_tab or self.preview_tabs.count() == 1:  # タブ選択条件
+            self.preview_tabs.setCurrentWidget(container)  # タブを選択
         self.preview_button.setText("プレビュー停止")  # ボタン表示更新
         self._append_log(f"プレビューを開始しました（{reason}）。")  # ログ出力
 # 区切り
     def _stop_preview(self) -> None:  # プレビュー停止処理
-        self.preview_player.stop()  # 再生停止
-        self.preview_button.setText("プレビュー開始")  # ボタン表示更新
-        self._append_log("プレビューを停止しました。")  # ログ出力
+        current_url = self._get_current_preview_url()  # 現在のURLを取得
+        if not current_url:  # URLが無い場合
+            self._append_log("停止するプレビューがありません。")  # ログ出力
+            return  # 処理中断
+        self._stop_preview_for_url(current_url, remove_tab=True)  # 対象プレビューを停止
 # 区切り
     def _toggle_preview(self) -> None:  # プレビュー切替処理
-        if self.preview_player.playbackState() == QtMultimedia.QMediaPlayer.PlaybackState.PlayingState:  # 再生中判定
+        if self.preview_button.text() == "プレビュー停止":  # 再生中判定
             self._stop_preview()  # 停止処理
         else:  # 停止中の場合
             self._start_preview()  # 開始処理
+#+#+#+#+
+    def _stop_preview_for_url(self, url: str, remove_tab: bool) -> None:  # URL指定プレビュー停止
+        session = self.preview_sessions.pop(url, None)  # セッションを取得して削除
+        if session is None:  # セッションが無い場合
+            return  # 処理中断
+        player = session["player"]  # プレイヤーを取得
+        player.stop()  # 再生停止
+        player.setSource(QtCore.QUrl())  # ソースをクリア
+        widget = session["widget"]  # コンテナを取得
+        if remove_tab:  # タブ削除を行う場合
+            index = self.preview_tabs.indexOf(widget)  # タブインデックス取得
+            if index != -1:  # タブが存在する場合
+                self.preview_tabs.removeTab(index)  # タブを削除
+            widget.deleteLater()  # ウィジェットを破棄
+        self._append_log(f"プレビューを停止しました: {url}")  # ログ出力
+        if self.preview_tabs.count() == 0:  # タブが無い場合
+            self.preview_button.setText("プレビュー開始")  # ボタン表示更新
 # 区切り
     def _start_recording(self) -> None:  # 録画開始処理
         url = self.url_input.text().strip()  # URL取得
