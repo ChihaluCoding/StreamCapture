@@ -1,4 +1,5 @@
 # 依存関係の定義
-streamlink>=6.9.0
+streamlink>=6.9.0  # Streamlink本体
+requests>=2.32.0  # API通信用
 # GUIの依存関係
-PyQt6>=6.7.1
+PyQt6>=6.7.1  # PyQt6本体
