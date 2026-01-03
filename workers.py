@@ -7,7 +7,7 @@ from PyQt6 import QtCore  # PyQt6のコア機能
 from streamlink import Streamlink  # Streamlink本体
 from streamlink.exceptions import StreamlinkError  # Streamlink例外
 from api_twitch import fetch_twitch_live_urls  # Twitch API処理
-from api_youtube import fetch_youtube_live_urls  # YouTube API処理
+from api_youtube import fetch_youtube_live_urls_with_fallback  # YouTube API処理
 from recording import convert_to_mp4, record_stream  # 録画処理を読み込み
 from streamlink_utils import (  # Streamlinkヘッダー調整
     restore_streamlink_headers,  # ヘッダー復元
@@ -92,17 +92,14 @@ class AutoCheckWorker(QtCore.QObject):  # 自動監視ワーカー定義
         live_urls: list[str] = []  # ライブURL一覧
         try:  # 例外処理開始
             if self.youtube_channels:  # YouTube配信者がある場合
-                if not self.youtube_api_key:  # APIキーが無い場合
-                    self.log_signal.emit("自動監視: YouTube APIキーが未設定です。")  # 失敗ログ
-                else:  # APIキーがある場合
-                    youtube_live = fetch_youtube_live_urls(  # YouTubeライブ取得
-                        api_key=self.youtube_api_key,  # APIキー指定
-                        entries=self.youtube_channels,  # 配信者一覧指定
-                        log_cb=self.log_signal.emit,  # ログ出力
-                    )  # 取得終了
-                    for live_url in youtube_live:  # ライブURLごとに処理
-                        if live_url not in live_urls:  # 重複確認
-                            live_urls.append(live_url)  # ライブURLを追加
+                youtube_live = fetch_youtube_live_urls_with_fallback(  # YouTubeライブ取得
+                    api_key=self.youtube_api_key,  # APIキー指定
+                    entries=self.youtube_channels,  # 配信者一覧指定
+                    log_cb=self.log_signal.emit,  # ログ出力
+                )  # 取得終了
+                for live_url in youtube_live:  # ライブURLごとに処理
+                    if live_url not in live_urls:  # 重複確認
+                        live_urls.append(live_url)  # ライブURLを追加
             if self.twitch_channels:  # Twitch配信者がある場合
                 if not self.twitch_client_id or not self.twitch_client_secret:  # APIキーが不足の場合
                     self.log_signal.emit("自動監視: Twitch APIキーが未設定です。")  # 失敗ログ

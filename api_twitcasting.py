@@ -1,10 +1,14 @@
 # -*- coding: utf-8 -*-  # 文字コード指定
 from __future__ import annotations  # 型ヒントの将来互換対応
 from typing import Callable, Optional  # 型ヒント補助
+import html  # HTMLエスケープ解除
+import re  # 正規表現処理
 import threading  # 排他制御
 import time  # 時刻取得
 import requests  # HTTP通信
-from platform_utils import extract_twitcasting_user_id  # ユーザーID抽出
+from platform_utils import extract_twitcasting_user_id, normalize_twitcasting_entry  # ユーザーID抽出
+
+from streamlink_utils import TWITCASTING_BASE_URL, TWITCASTING_UA  # ツイキャス向けヘッダー
 
 TWITCASTING_TOKEN_CACHE = {"access_token": "", "expires_at": 0.0}  # ツイキャストークンのキャッシュ
 TWITCASTING_TOKEN_LOCK = threading.Lock()  # ツイキャストークンの排他制御
@@ -126,6 +130,43 @@ def fetch_twitcasting_display_name(  # ツイキャス表示名取得
         return name if name else None  # 表示名を返却
     log_cb(f"ツイキャス表示名の取得に失敗しました: {user_id}")  # 失敗ログ
     return None  # 取得失敗
+
+def fetch_twitcasting_display_name_by_scraping(  # ツイキャス表示名取得（スクレイピング）
+    entry: str,  # 入力値
+    log_cb: Callable[[str], None],  # ログコールバック
+) -> Optional[str]:  # 表示名を返却
+    normalized = normalize_twitcasting_entry(entry)  # 入力を正規化
+    if not normalized:  # 正規化に失敗した場合
+        log_cb("ツイキャス表示名の取得に失敗しました: 入力が無効です。")  # 失敗ログ
+        return None  # 取得失敗
+    headers = {  # ヘッダーを定義
+        "User-Agent": TWITCASTING_UA,  # ユーザーエージェント設定
+        "Referer": TWITCASTING_BASE_URL,  # リファラ設定
+    }  # ヘッダー定義終了
+    try:  # 例外処理開始
+        response = requests.get(  # GETリクエスト実行
+            normalized,  # 正規化URL指定
+            headers=headers,  # ヘッダー指定
+            timeout=10,  # タイムアウト指定
+        )  # レスポンス取得
+    except requests.RequestException as exc:  # 通信例外の捕捉
+        log_cb(f"ツイキャス表示名の取得に失敗しました: {exc}")  # 失敗ログ
+        return None  # 取得失敗
+    if response.status_code != 200:  # ステータス異常の場合
+        log_cb(f"ツイキャス表示名の取得が失敗しました: {response.status_code}")  # 失敗ログ
+        return None  # 取得失敗
+    match = re.search(  # 配信者名の要素を検索
+        r'<span[^>]*class="tw-live-author__info-username-inner"[^>]*>(.*?)</span>',  # 対象のspan
+        response.text,  # HTML本文
+        re.DOTALL,  # 改行を含めて検索
+    )  # 検索終了
+    if not match:  # 要素が見つからない場合
+        log_cb("ツイキャス表示名の取得に失敗しました: 要素が見つかりません。")  # 失敗ログ
+        return None  # 取得失敗
+    raw_name = match.group(1)  # 抽出結果を取得
+    cleaned = re.sub(r"<[^>]+>", "", raw_name)  # 余分なタグを除去
+    cleaned = html.unescape(cleaned).strip()  # HTMLエスケープを解除して整形
+    return cleaned if cleaned else None  # 表示名を返却
 
 def fetch_twitcasting_live_urls(  # ツイキャスライブURL取得
     client_id: str,  # クライアントID

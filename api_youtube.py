@@ -1,9 +1,190 @@
 # -*- coding: utf-8 -*-  # 文字コード指定
 from __future__ import annotations  # 型ヒントの将来互換対応
 from typing import Callable, Optional  # 型ヒント補助
+import json  # JSON解析
+import re  # 正規表現処理
 import requests  # HTTP通信
 from api_common import request_json  # 共通API処理を読み込み
 from platform_utils import normalize_youtube_entry  # YouTube正規化を読み込み
+
+def build_youtube_live_page_url(entry: str) -> Optional[str]:  # YouTubeライブページURL構築
+    kind, value = normalize_youtube_entry(entry)  # 入力を正規化
+    if kind == "channel" and value:  # チャンネルIDの場合
+        return f"https://www.youtube.com/channel/{value}/live"  # チャンネルID用のライブURL
+    if kind == "handle" and value:  # ハンドルの場合
+        return f"https://www.youtube.com/@{value}/live"  # ハンドル用のライブURL
+    if kind == "user" and value:  # user形式の場合
+        return f"https://www.youtube.com/user/{value}/live"  # user用のライブURL
+    return None  # 対応外はNone
+
+def resolve_youtube_live_url_by_redirect(  # /liveのリダイレクトからライブURL取得
+    live_page_url: str,  # /liveページURL
+    log_cb: Callable[[str], None],  # ログコールバック
+) -> Optional[str]:  # ライブURLを返却
+    headers = {  # ユーザーエージェント指定
+        "User-Agent": "Mozilla/5.0 (compatible; HaishinRecorder/1.0)",  # 軽量なUA文字列
+    }  # ヘッダー定義終了
+    try:  # 例外処理開始
+        response = requests.get(  # /liveへアクセス
+            live_page_url,  # /live URL指定
+            headers=headers,  # ヘッダー指定
+            allow_redirects=True,  # リダイレクトを許可
+            timeout=10,  # タイムアウト指定
+        )  # レスポンス取得
+    except requests.RequestException as exc:  # 通信例外の捕捉
+        log_cb(f"YouTube /live取得に失敗しました: {exc}")  # 失敗ログ
+        return None  # 取得失敗
+    if response.status_code >= 400:  # エラーステータスの場合
+        log_cb(f"YouTube /live応答が失敗しました: {response.status_code}")  # 失敗ログ
+        return None  # 取得失敗
+    final_url = response.url or ""  # 最終URLを取得
+    history_urls = [resp.url for resp in response.history if resp.url]  # 履歴URL一覧
+    for candidate in history_urls + [final_url]:  # 履歴と最終URLを確認
+        if "watch?v=" in candidate or "youtu.be/" in candidate:  # 動画URL判定
+            return candidate  # ライブURLとして返却
+    try:  # HTML解析の例外処理
+        html_text = response.text  # HTML本文取得
+    except Exception:  # 取得失敗時
+        html_text = ""  # 空文字にする
+    if html_text:  # HTMLがある場合
+        match = re.search(  # watch URLを検索
+            r"https?://www\\.youtube\\.com/watch\\?v=[\\w-]{6,}",  # watch URLパターン
+            html_text,  # HTML本文
+        )  # 検索終了
+        if match:  # マッチした場合
+            return match.group(0)  # ライブURLを返却
+        video_match = re.search(  # videoIdを検索
+            r'"videoId":"([\\w-]{6,})"',  # videoIdパターン
+            html_text,  # HTML本文
+        )  # 検索終了
+        if video_match:  # マッチした場合
+            video_id = video_match.group(1)  # videoIdを取得
+            return f"https://www.youtube.com/watch?v={video_id}"  # watch URLを生成
+        endpoint_match = re.search(  # watchEndpoint経由の動画IDを検索
+            r'"watchEndpoint"\\s*:\\s*\\{[^}]*"videoId"\\s*:\\s*"([\\w-]{6,})"',  # watchEndpointパターン
+            html_text,  # HTML本文
+            re.DOTALL,  # 改行を含めて検索
+        )  # 検索終了
+        if endpoint_match:  # マッチした場合
+            video_id = endpoint_match.group(1)  # videoIdを取得
+            return f"https://www.youtube.com/watch?v={video_id}"  # watch URLを生成
+        href_match = re.search(  # /watch?v=... 形式を検索
+            r'/watch\\?v=([\\w-]{6,})',  # hrefパターン
+            html_text,  # HTML本文
+        )  # 検索終了
+        if href_match:  # マッチした場合
+            video_id = href_match.group(1)  # videoIdを取得
+            return f"https://www.youtube.com/watch?v={video_id}"  # watch URLを生成
+        player_response = _extract_json_from_marker(  # ytInitialPlayerResponseを抽出
+            html_text,  # HTML本文
+            "ytInitialPlayerResponse",  # マーカー文字列
+        )  # 抽出終了
+        live_video_id = _find_live_video_id(player_response)  # ライブ動画IDを探索
+        if live_video_id:  # ライブ動画IDがある場合
+            return f"https://www.youtube.com/watch?v={live_video_id}"  # watch URLを生成
+        initial_data = _extract_json_from_marker(  # ytInitialDataを抽出
+            html_text,  # HTML本文
+            "ytInitialData",  # マーカー文字列
+        )  # 抽出終了
+        data_video_id = _find_live_video_id(initial_data)  # ライブ動画IDを探索
+        if data_video_id:  # ライブ動画IDがある場合
+            return f"https://www.youtube.com/watch?v={data_video_id}"  # watch URLを生成
+    return None  # ライブ未検知
+
+def _extract_json_from_marker(text: str, marker: str) -> Optional[dict]:  # マーカー付きJSON抽出
+    index = text.find(marker)  # マーカー位置を検索
+    if index == -1:  # マーカーが無い場合
+        return None  # 抽出失敗
+    start = text.find("{", index)  # JSON開始位置を検索
+    if start == -1:  # 開始位置が無い場合
+        return None  # 抽出失敗
+    depth = 0  # 波括弧の深さ
+    in_string = False  # 文字列内フラグ
+    escape = False  # エスケープ中フラグ
+    for offset in range(start, len(text)):  # 文字列を走査
+        char = text[offset]  # 文字を取得
+        if in_string:  # 文字列内の場合
+            if escape:  # エスケープ中の場合
+                escape = False  # エスケープを解除
+            elif char == "\\\\":  # バックスラッシュの場合
+                escape = True  # エスケープ開始
+            elif char == '"':  # 文字列終端の場合
+                in_string = False  # 文字列内フラグ解除
+        else:  # 文字列外の場合
+            if char == '"':  # 文字列開始の場合
+                in_string = True  # 文字列内フラグ設定
+            elif char == "{":  # 開始波括弧の場合
+                depth += 1  # 深さを増加
+            elif char == "}":  # 終了波括弧の場合
+                depth -= 1  # 深さを減少
+                if depth == 0:  # JSON終了の場合
+                    json_text = text[start : offset + 1]  # JSON文字列を抽出
+                    try:  # 例外処理開始
+                        return json.loads(json_text)  # JSONを解析して返却
+                    except json.JSONDecodeError:  # 解析失敗時
+                        return None  # 抽出失敗
+    return None  # 抽出失敗
+
+def _find_live_video_id(data: Optional[object]) -> Optional[str]:  # ライブ動画ID探索
+    if data is None:  # データが無い場合
+        return None  # 探索失敗
+    stack = [data]  # 探索スタックを初期化
+    while stack:  # スタックがある間ループ
+        current = stack.pop()  # 要素を取得
+        if isinstance(current, dict):  # 辞書の場合
+            video_id = current.get("videoId")  # videoIdを取得
+            is_live_now = current.get("isLiveNow")  # ライブ中フラグを取得
+            is_live = current.get("isLive")  # ライブフラグを取得
+            live_streamability = current.get("liveStreamability")  # ライブ可否情報を取得
+            if video_id and (is_live_now or is_live or live_streamability):  # ライブ判定
+                return str(video_id)  # videoIdを返却
+            for value in current.values():  # 値を順に追加
+                stack.append(value)  # スタックに追加
+        elif isinstance(current, list):  # リストの場合
+            for value in current:  # 要素を順に追加
+                stack.append(value)  # スタックに追加
+    return None  # 探索失敗
+
+def fetch_youtube_live_urls_by_live_redirect(  # /liveリダイレクトでライブURL取得
+    entries: list[str],  # 入力一覧
+    log_cb: Callable[[str], None],  # ログコールバック
+) -> list[str]:  # ライブURL一覧を返却
+    live_urls: list[str] = []  # ライブURL一覧
+    for entry in entries:  # 入力ごとに処理
+        live_page_url = build_youtube_live_page_url(entry)  # /live URLを構築
+        if not live_page_url:  # URL構築失敗時
+            log_cb("YouTube /live検出: 対応外の入力形式です。")  # 形式不明ログ
+            continue  # 次へ
+        resolved = resolve_youtube_live_url_by_redirect(  # リダイレクト解決
+            live_page_url,  # /live URL指定
+            log_cb=log_cb,  # ログコールバック指定
+        )  # 解決終了
+        if resolved and resolved not in live_urls:  # ライブURLが取得できた場合
+            live_urls.append(resolved)  # ライブURLを追加
+            log_cb(f"YouTube /live検出: 配信検知 {live_page_url} -> {resolved}")  # 検知ログ
+        elif resolved is None:  # ライブが見つからない場合
+            log_cb(f"YouTube /live検出: 配信なし {live_page_url}")  # 配信なしログ
+    return live_urls  # ライブURL一覧を返却
+
+def fetch_youtube_live_urls_with_fallback(  # YouTubeライブURL取得（フォールバック付）
+    api_key: str,  # APIキー
+    entries: list[str],  # 入力一覧
+    log_cb: Callable[[str], None],  # ログコールバック
+) -> list[str]:  # ライブURL一覧を返却
+    if not entries:  # 入力が無い場合
+        return []  # 空一覧を返却
+    if not api_key:  # APIキーが無い場合
+        log_cb("自動監視: YouTube APIキーが未設定のため /live 検出を使用します。")  # 代替処理ログ
+        return fetch_youtube_live_urls_by_live_redirect(entries, log_cb)  # /live検出を実行
+    live_urls = fetch_youtube_live_urls(  # API経由でライブ取得
+        api_key=api_key,  # APIキー指定
+        entries=entries,  # 配信者一覧指定
+        log_cb=log_cb,  # ログ出力
+    )  # 取得終了
+    if live_urls:  # APIで取得できた場合
+        return live_urls  # API結果を返却
+    log_cb("自動監視: YouTube APIで取得できなかったため /live 検出を試行します。")  # フォールバックログ
+    return fetch_youtube_live_urls_by_live_redirect(entries, log_cb)  # /live検出へフォールバック
 
 def resolve_youtube_channel_id(  # YouTubeチャンネルID解決
     api_key: str,  # APIキー

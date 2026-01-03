@@ -10,7 +10,5 @@ DEFAULT_AUTO_URLS = ""  # 自動監視の既定URL一覧
 DEFAULT_TWITCASTING_ENTRIES = ""  # ツイキャス監視の既定入力
 DEFAULT_NICONICO_ENTRIES = ""  # ニコ生監視の既定入力
 DEFAULT_TIKTOK_ENTRIES = ""  # TikTok監視の既定入力
-DEFAULT_TIKTOK_CLIENT_ID = ""  # TikTokクライアントキーの既定値
-DEFAULT_TIKTOK_CLIENT_SECRET = ""  # TikTokクライアントシークレットの既定値
 SETTINGS_ORG = "PF"  # 設定の組織名
 SETTINGS_APP = "配信録画くん"  # 設定のアプリ名
