@@ -12,9 +12,13 @@ from streamlink import Streamlink  # Streamlink本体
 from streamlink.exceptions import StreamlinkError  # Streamlink例外
 from api_niconico import fetch_niconico_display_name_by_scraping  # ニコ生表示名取得
 from api_tiktok import fetch_tiktok_display_name  # TikTok表示名取得
-from api_twitch import fetch_twitch_display_name  # Twitch表示名取得
+from api_twitch import (  # Twitch API処理
+    fetch_twitch_display_name,  # Twitch表示名取得
+    fetch_twitch_live_urls,  # Twitchライブ取得
+)
 from api_twitcasting import fetch_twitcasting_display_name_by_scraping  # ツイキャス表示名取得
 from api_youtube import (  # YouTube API処理
+    build_youtube_live_page_url,  # YouTubeライブページURL構築
     fetch_youtube_channel_title_by_id,  # チャンネル名取得
     fetch_youtube_channel_title_by_video,  # 動画経由のチャンネル名取得
     fetch_youtube_oembed_author_name,  # oEmbed取得
@@ -344,6 +348,7 @@ class MainWindow(QtWidgets.QMainWindow):  # メインウィンドウ定義
         self.auto_check_thread: QtCore.QThread | None = None  # 自動監視スレッド参照
         self.auto_check_worker: AutoCheckWorker | None = None  # 自動監視ワーカー参照
         self.auto_check_in_progress = False  # 自動監視中フラグ
+        self.auto_paused_by_user = False  # 自動録画の手動停止フラグ
         self.preview_tabs = QtWidgets.QTabWidget()  # プレビュー用タブウィジェット
         self.preview_tabs.setTabsClosable(True)  # タブのクローズを有効化
         self.preview_tabs.tabCloseRequested.connect(self._on_preview_tab_close)  # タブ閉じイベント接続
@@ -404,16 +409,20 @@ class MainWindow(QtWidgets.QMainWindow):  # メインウィンドウ定義
         self.settings_button = QtWidgets.QPushButton("設定")  # 設定ボタン
         self.start_button = QtWidgets.QPushButton("録画開始")  # 開始ボタン
         self.stop_button = QtWidgets.QPushButton("録画停止")  # 停止ボタン
+        self.auto_resume_button = QtWidgets.QPushButton("自動録画再開")  # 自動録画再開ボタン
         self.stop_button.setEnabled(False)  # 停止ボタンを無効化
+        self.auto_resume_button.setEnabled(False)  # 自動録画再開ボタンを無効化
         self.preview_button.clicked.connect(self._toggle_preview)  # プレビューイベント接続
         self.settings_button.clicked.connect(self._open_settings_dialog)  # 設定ダイアログ表示
         self.start_button.clicked.connect(self._start_recording)  # 開始イベント接続
         self.stop_button.clicked.connect(self._stop_recording)  # 停止イベント接続
+        self.auto_resume_button.clicked.connect(self._resume_auto_recording)  # 自動録画再開イベント接続
         button_row.addWidget(self.preview_button)  # プレビューボタン追加
         button_row.addWidget(self.settings_button)  # 設定ボタン追加
         button_row.addStretch(1)  # 余白追加
         button_row.addWidget(self.start_button)  # 開始ボタン追加
         button_row.addWidget(self.stop_button)  # 停止ボタン追加
+        button_row.addWidget(self.auto_resume_button)  # 自動録画再開ボタン追加
         layout.addLayout(button_row)  # ボタン行追加
         content_row = QtWidgets.QHBoxLayout()  # プレビューとログの横並びレイアウト
         preview_group = QtWidgets.QGroupBox("プレビュー")  # プレビュー枠を作成
@@ -579,6 +588,32 @@ class MainWindow(QtWidgets.QMainWindow):  # メインウィンドウ定義
             return getattr(stream, "url")  # URLを返却
         self._append_log("プレビューに対応したストリームURLを取得できませんでした。")  # ログ出力
         return None  # 失敗時はNone
+    def _is_twitch_live_for_preview(self, url: str) -> bool:  # Twitchプレビューのライブ判定
+        parsed = urlparse(url)  # URLを解析
+        host = parsed.netloc.lower()  # ホストを取得
+        if "twitch" not in host and "twitch" not in url:  # Twitch以外の場合
+            return True  # 判定不要としてTrue
+        login = normalize_twitch_login(url)  # ログイン名を取得
+        if not login:  # ログイン名が無い場合
+            return True  # 判定不要としてTrue
+        client_id = load_setting_value("twitch_client_id", "", str).strip()  # Client ID取得
+        client_secret = load_setting_value("twitch_client_secret", "", str).strip()  # Client Secret取得
+        if not client_id or not client_secret:  # APIキー不足の場合
+            self._append_log("Twitch APIキーが未設定のためライブ判定をスキップします。")  # 判定スキップログ
+            return True  # 判定できないためTrue
+        live_urls = fetch_twitch_live_urls(  # TwitchライブURLを取得
+            client_id=client_id,  # Client ID指定
+            client_secret=client_secret,  # Client Secret指定
+            entries=[login],  # ログイン名を指定
+            log_cb=self._append_log,  # ログコールバック指定
+        )  # 取得終了
+        for live_url in live_urls:  # ライブURLごとに確認
+            live_login = normalize_twitch_login(live_url)  # ライブ側のログイン名を取得
+            if live_login == login:  # ログイン名が一致する場合
+                return True  # ライブ中としてTrue
+        self._append_log("Twitch配信がオフラインのためプレビューを開始しません。")  # オフラインログ
+        self._show_info("Twitch配信がオフラインのためプレビューを開始しません。")  # オフライン通知
+        return False  # オフラインとしてFalse
     def _should_use_ffmpeg_preview(self, url: str) -> bool:  # FFmpegプレビュー使用判定
         return is_twitcasting_url(url)  # ツイキャスの場合はFFmpeg経由
     def _allocate_preview_udp_port(self) -> int:  # UDPポート確保
@@ -717,6 +752,17 @@ class MainWindow(QtWidgets.QMainWindow):  # メインウィンドウ定義
     def _configure_auto_monitor(self) -> None:  # 自動監視の設定
         enabled = load_bool_setting("auto_enabled", DEFAULT_AUTO_ENABLED)  # 有効設定を取得
         interval = load_setting_value("auto_check_interval", DEFAULT_AUTO_CHECK_INTERVAL_SEC, int)  # 間隔設定を取得
+        self._refresh_auto_resume_button_state()  # 自動録画再開ボタンの状態を更新
+        if self.auto_paused_by_user:  # 手動停止中の場合
+            if self.auto_timer.isActive():  # 自動監視が動作中の場合
+                self.auto_timer.stop()  # 自動監視を停止
+            if self.auto_check_worker is not None:  # 自動監視ワーカーが存在する場合
+                self.auto_check_worker.stop()  # 監視停止を要求
+            self._cleanup_auto_check_thread()  # 自動監視スレッドを後始末
+            self.auto_check_in_progress = False  # 監視中フラグを解除
+            if enabled:  # 自動録画が有効の場合
+                self._append_log("自動監視: 手動停止中のため停止します。")  # 手動停止中ログ
+            return  # 手動停止中は再設定しない
         youtube_channels = self._get_auto_youtube_channels()  # YouTube配信者一覧を取得
         twitch_channels = self._get_auto_twitch_channels()  # Twitch配信者一覧を取得
         twitcasting_urls = self._get_auto_twitcasting_urls()  # ツイキャスURL一覧を取得
@@ -740,6 +786,8 @@ class MainWindow(QtWidgets.QMainWindow):  # メインウィンドウ定義
     def _trigger_auto_check_now(self) -> None:  # 自動監視の即時実行
         if self.auto_check_in_progress:  # 監視中の場合
             return  # 重複チェックを防止
+        if self.auto_paused_by_user:  # 手動停止中の場合
+            return  # 何もしない
         QtCore.QTimer.singleShot(200, self._on_auto_timer)  # 少し遅延して監視を実行
     def _get_auto_twitcasting_urls(self) -> list[str]:  # ツイキャス監視URL一覧の取得
         raw_text = load_setting_value("twitcasting_entries", DEFAULT_TWITCASTING_ENTRIES, str)  # 設定文字列を取得
@@ -759,9 +807,49 @@ class MainWindow(QtWidgets.QMainWindow):  # メインウィンドウ定義
     def _get_auto_twitch_channels(self) -> list[str]:  # Twitch配信者一覧の取得
         raw_text = load_setting_value("twitch_channels", "", str)  # 設定文字列を取得
         return parse_auto_url_list(raw_text)  # 解析済み一覧を返却
+    def _collect_preview_urls_from_settings(self) -> list[str]:  # 設定からプレビューURL一覧を作成
+        twitcasting_urls = self._get_auto_twitcasting_urls()  # ツイキャスURL一覧を取得
+        niconico_urls = self._get_auto_niconico_urls()  # ニコ生URL一覧を取得
+        tiktok_urls = self._get_auto_tiktok_urls()  # TikTok URL一覧を取得
+        youtube_entries = self._get_auto_youtube_channels()  # YouTube入力一覧を取得
+        twitch_entries = self._get_auto_twitch_channels()  # Twitch入力一覧を取得
+        youtube_urls: list[str] = []  # YouTubeプレビューURL一覧を初期化
+        for entry in youtube_entries:  # 入力ごとに処理
+            cleaned = entry.strip()  # 入力値を正規化
+            if not cleaned:  # 空の場合
+                continue  # 次へ
+            url = ""  # URL変数を初期化
+            if cleaned.startswith("http://") or cleaned.startswith("https://"):  # URL形式の場合
+                url = cleaned  # そのまま使用
+            elif "youtube.com" in cleaned or "youtu.be" in cleaned:  # スキーム無しURLの場合
+                url = f"https://{cleaned}"  # httpsを補完
+            else:  # URL形式でない場合
+                url = build_youtube_live_page_url(cleaned) or ""  # /live URLを生成
+            if not url:  # URLが空の場合
+                continue  # 次へ
+            if url not in youtube_urls:  # 重複していない場合
+                youtube_urls.append(url)  # URLを追加
+        twitch_urls: list[str] = []  # TwitchプレビューURL一覧を初期化
+        for entry in twitch_entries:  # 入力ごとに処理
+            login = normalize_twitch_login(entry)  # ログイン名を正規化
+            if not login:  # ログイン名が空の場合
+                continue  # 次へ
+            url = f"https://www.twitch.tv/{login}"  # Twitch URLを生成
+            if url not in twitch_urls:  # 重複していない場合
+                twitch_urls.append(url)  # URLを追加
+        merged_urls = merge_unique_urls(  # プレビュー対象URLを結合
+            twitcasting_urls,  # ツイキャスURL一覧
+            niconico_urls,  # ニコ生URL一覧
+            tiktok_urls,  # TikTok URL一覧
+            youtube_urls,  # YouTube URL一覧
+            twitch_urls,  # Twitch URL一覧
+        )  # 結合の終了
+        return merged_urls  # 結合済みURL一覧を返却
     def _on_auto_timer(self) -> None:  # 自動監視タイマー処理
         if self.auto_check_in_progress:  # 監視中の場合
             return  # 重複チェックを防止
+        if self.auto_paused_by_user:  # 手動停止中の場合
+            return  # 何もしない
         if not load_bool_setting("auto_enabled", DEFAULT_AUTO_ENABLED):  # 無効の場合
             return  # 何もしない
         twitcasting_urls = self._get_auto_twitcasting_urls()  # ツイキャスURL一覧を取得
@@ -799,6 +887,16 @@ class MainWindow(QtWidgets.QMainWindow):  # メインウィンドウ定義
         self.auto_check_worker.finished_signal.connect(self._on_auto_check_finished)  # 完了イベント接続
         self.auto_check_thread.start()  # 監視スレッド開始
     def _on_auto_check_finished(self, live_urls: list[str]) -> None:  # 自動監視完了処理
+        if self.auto_paused_by_user:  # 手動停止中の場合
+            self._append_log("自動監視: 手動停止中のため録画開始をスキップしました。")  # スキップログ
+            self._cleanup_auto_check_thread()  # 自動監視スレッドを後始末
+            self.auto_check_in_progress = False  # 監視中フラグを解除
+            return  # 録画開始はしない
+        if not load_bool_setting("auto_enabled", DEFAULT_AUTO_ENABLED):  # 自動録画が無効の場合
+            self._append_log("自動監視: 無効設定のため録画開始をスキップしました。")  # スキップログ
+            self._cleanup_auto_check_thread()  # 自動監視スレッドを後始末
+            self.auto_check_in_progress = False  # 監視中フラグを解除
+            return  # 録画開始はしない
         for url in live_urls:  # ライブURLごとに処理
             self._start_auto_recording(url)  # 自動録画を開始
         self._cleanup_auto_check_thread()  # 監視スレッドを後始末
@@ -897,12 +995,25 @@ class MainWindow(QtWidgets.QMainWindow):  # メインウィンドウ定義
     def _start_preview(self) -> None:  # プレビュー開始処理
         url = self.url_input.text().strip()  # URL取得
         if not url:  # URLが空の場合
-            self._show_info("配信URLを入力してください。")  # 通知表示
-            return  # 処理中断
+            preview_urls = self._collect_preview_urls_from_settings()  # 設定からプレビューURLを取得
+            if not preview_urls:  # プレビュー対象が無い場合
+                self._show_info("設定にプレビュー対象の配信URLがありません。")  # 通知表示
+                return  # 処理中断
+            self._append_log("設定に登録された配信URLのプレビューを開始します。")  # 開始ログを出力
+            for preview_url in preview_urls:  # URLごとに処理
+                self._start_preview_for_url(  # URL指定でプレビュー開始
+                    preview_url,  # URL指定
+                    update_input=False,  # 入力欄を更新しない
+                    reason="設定",  # 理由は設定開始
+                    select_tab=False,  # タブを強制選択しない
+                )  # プレビュー開始の終了
+            return  # 設定プレビューで終了
         self._start_preview_for_url(url, update_input=False, reason="手動", select_tab=True)  # URL指定でプレビュー開始
     def _start_preview_for_url(self, url: str, update_input: bool, reason: str, select_tab: bool) -> None:  # URL指定プレビュー開始
         if update_input:  # 入力欄を更新する場合
             self.url_input.setText(url)  # URL入力欄を更新
+        if reason == "手動" and not self._is_twitch_live_for_preview(url):  # 手動プレビューのTwitch判定
+            return  # オフラインなら開始しない
         use_ffmpeg = self._should_use_ffmpeg_preview(url)  # FFmpeg利用判定
         process: QtCore.QProcess | None = None  # プロセス初期化
         pipe_stop_event: threading.Event | None = None  # パイプ停止フラグ
@@ -1127,11 +1238,37 @@ class MainWindow(QtWidgets.QMainWindow):  # メインウィンドウ定義
             stop_event = session.get("stop_event")  # 停止フラグ取得
             if isinstance(stop_event, threading.Event):  # 停止フラグがある場合
                 stop_event.set()  # 停止フラグを設定
+    def _pause_auto_recording_by_user(self) -> None:  # 手動停止で自動録画を止める
+        if self.auto_paused_by_user:  # 既に手動停止中の場合
+            return  # 何もしない
+        if not load_bool_setting("auto_enabled", DEFAULT_AUTO_ENABLED):  # 自動録画が無効の場合
+            return  # 何もしない
+        self.auto_paused_by_user = True  # 手動停止状態に設定
+        self._refresh_auto_resume_button_state()  # 自動録画再開ボタン状態を更新
+        if self.auto_timer.isActive():  # 自動監視が動作中の場合
+            self.auto_timer.stop()  # 自動監視を停止
+        if self.auto_check_worker is not None:  # 自動監視ワーカーが存在する場合
+            self.auto_check_worker.stop()  # 監視停止を要求
+        self._cleanup_auto_check_thread()  # 自動監視スレッドを後始末
+        self.auto_check_in_progress = False  # 監視中フラグを解除
+        self._append_log("自動監視を手動で停止しました。")  # 手動停止ログ
+    def _resume_auto_recording(self) -> None:  # 自動録画再開処理
+        if not self.auto_paused_by_user:  # 手動停止状態ではない場合
+            self._append_log("自動録画は停止中ではありません。")  # 状態ログ
+            return  # 処理中断
+        self.auto_paused_by_user = False  # 手動停止状態を解除
+        self._refresh_auto_resume_button_state()  # 自動録画再開ボタン状態を更新
+        self._append_log("自動録画を再開します。")  # 再開ログ
+        self._configure_auto_monitor()  # 自動監視を再設定
+    def _refresh_auto_resume_button_state(self) -> None:  # 自動録画再開ボタン状態更新
+        auto_enabled = load_bool_setting("auto_enabled", DEFAULT_AUTO_ENABLED)  # 自動録画の有効設定を取得
+        self.auto_resume_button.setEnabled(self.auto_paused_by_user and auto_enabled)  # 再開ボタンの有効状態を反映
     def _stop_recording(self) -> None:  # 録画停止処理
         if self.stop_event is None and not self.auto_sessions:  # 録画が無い場合
             self._append_log("停止対象の録画がありません。")  # ログ出力
             return  # 処理中断
         self._stop_current_recordings()  # 現在の録画を停止
+        self._pause_auto_recording_by_user()  # 自動録画を手動停止状態にする
         self._append_log("停止要求を送信しました。")  # ログ出力
         self.stop_button.setEnabled(False)  # 停止ボタン無効化
     def _has_active_recording_tasks(self) -> bool:  # 録画/変換が動作中か判定
