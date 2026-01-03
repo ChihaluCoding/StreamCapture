@@ -10,6 +10,7 @@ from api_twitch import fetch_twitch_live_urls  # Twitch API処理
 from api_youtube import fetch_youtube_live_urls_with_fallback  # YouTube API処理
 from recording import convert_to_mp4, record_stream  # 録画処理を読み込み
 from streamlink_utils import (  # Streamlinkヘッダー調整
+    apply_streamlink_options_for_url,  # URL別オプション調整
     restore_streamlink_headers,  # ヘッダー復元
     set_streamlink_headers_for_url,  # URL別ヘッダー設定
 )
@@ -41,6 +42,7 @@ class RecorderWorker(QtCore.QObject):  # 録画ワーカー定義
         session = Streamlink()  # Streamlinkセッション生成
         session.set_option("http-timeout", self.http_timeout)  # HTTPタイムアウト設定
         session.set_option("stream-timeout", self.stream_timeout)  # ストリームタイムアウト設定
+        apply_streamlink_options_for_url(session, self.url)  # URL別のStreamlinkオプションを反映
         set_streamlink_headers_for_url(session, self.url)  # URLに合わせてヘッダー調整
         def status_cb(message: str) -> None:  # 状態通知用コールバック
             self.log_signal.emit(message)  # ログシグナル送信
@@ -131,6 +133,7 @@ class AutoCheckWorker(QtCore.QObject):  # 自動監視ワーカー定義
                     if self.stop_event.is_set():  # 停止要求の確認
                         break  # ループを中断
                     self.log_signal.emit(f"自動監視: チェック開始 {url}")  # 監視開始ログ
+                    apply_streamlink_options_for_url(session, url)  # URL別のStreamlinkオプションを反映
                     original_headers = set_streamlink_headers_for_url(session, url)  # ヘッダー調整
                     try:  # 例外処理開始
                         streams = session.streams(url)  # ストリーム一覧を取得

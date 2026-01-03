@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-  # 文字コード指定
 from __future__ import annotations  # 型ヒントの将来互換対応
 from streamlink import Streamlink  # Streamlink本体
+from urllib.parse import urlparse  # URL解析
 
 TWITCASTING_BASE_URL = "https://twitcasting.tv/"  # ツイキャスの基準URL
 TWITCASTING_UA = (
@@ -22,3 +23,11 @@ def set_streamlink_headers_for_url(session: Streamlink, url: str) -> dict:  # UR
 def restore_streamlink_headers(session: Streamlink, original_headers: dict) -> None:  # ヘッダー復元
     session.http.headers.clear()  # 現在のヘッダーをクリア
     session.http.headers.update(original_headers)  # 元のヘッダーを復元
+
+def apply_streamlink_options_for_url(session: Streamlink, url: str) -> None:  # URL別Streamlinkオプション調整
+    parsed = urlparse(url)  # URLを解析
+    host = parsed.netloc.lower()  # ホストを取得
+    if "twitch" not in host and "twitch" not in url:  # Twitch以外の場合
+        return  # 何もしない
+    session.set_option("twitch-disable-hosting", True)  # ホスティングを回避する
+    session.set_option("twitch-low-latency", True)  # 低遅延モードを有効化する
