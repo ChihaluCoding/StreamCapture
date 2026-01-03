@@ -64,6 +64,7 @@ class RecorderWorker(QtCore.QObject):  # 録画ワーカー定義
 
 class AutoCheckWorker(QtCore.QObject):  # 自動監視ワーカー定義
     log_signal = QtCore.pyqtSignal(str)  # ログ通知シグナル
+    notify_signal = QtCore.pyqtSignal(str)  # 通知用シグナル
     finished_signal = QtCore.pyqtSignal(list)  # 完了通知シグナル
     def __init__(  # 初期化処理
         self,  # 自身参照
@@ -92,10 +93,19 @@ class AutoCheckWorker(QtCore.QObject):  # 自動監視ワーカー定義
         live_urls: list[str] = []  # ライブURL一覧
         try:  # 例外処理開始
             if self.youtube_channels:  # YouTube配信者がある場合
+                def _notify_youtube_multi(entry: str, live_ids: list[str]) -> None:  # 複数配信通知
+                    message = (  # 通知メッセージを組み立て
+                        "YouTubeで複数の配信枠を検知しましたが、"  # 先頭文
+                        "APIキーが未設定のため録画を開始しません。 "  # 条件説明
+                        f"対象: {entry}"  # 対象情報
+                    )  # メッセージ生成の終了
+                    self.notify_signal.emit(message)  # ポップアップ通知
+                    self.log_signal.emit(f"自動監視: {message}")  # ログにも記録
                 youtube_live = fetch_youtube_live_urls_with_fallback(  # YouTubeライブ取得
                     api_key=self.youtube_api_key,  # APIキー指定
                     entries=self.youtube_channels,  # 配信者一覧指定
                     log_cb=self.log_signal.emit,  # ログ出力
+                    multi_detect_cb=_notify_youtube_multi,  # 複数配信検知通知
                 )  # 取得終了
                 for live_url in youtube_live:  # ライブURLごとに処理
                     if live_url not in live_urls:  # 重複確認

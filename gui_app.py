@@ -8,6 +8,7 @@ from ui_app import MainWindow  # メインウィンドウを読み込み
 def main() -> int:  # エントリポイント
     app = QtWidgets.QApplication(sys.argv)  # アプリケーション生成
     app.setApplicationName("配信録画くん")  # アプリ名設定
+    app.setQuitOnLastWindowClosed(False)  # タスクトレイ常駐に備えて終了を抑制
     window = MainWindow()  # メインウィンドウ生成
     window.show()  # ウィンドウ表示
     return app.exec()  # イベントループ開始
