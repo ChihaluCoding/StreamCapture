@@ -1,0 +1,24 @@
+# -*- coding: utf-8 -*-  # 文字コード指定
+DEFAULT_QUALITY = "best"  # 既定の画質指定
+DEFAULT_RETRY_COUNT = 5  # 既定の再接続回数
+DEFAULT_RETRY_WAIT_SEC = 10  # 既定の再接続待機秒
+READ_CHUNK_SIZE = 1024 * 1024  # 読み取りチャンクサイズ
+FLUSH_INTERVAL_SEC = 5  # 定期フラッシュ間隔
+DEFAULT_AUTO_ENABLED = False  # 自動録画の既定有効状態
+DEFAULT_AUTO_CHECK_INTERVAL_SEC = 10  # 自動監視の既定間隔秒
+DEFAULT_AUTO_URLS = ""  # 自動監視の既定URL一覧
+DEFAULT_TWITCASTING_ENTRIES = ""  # ツイキャス監視の既定入力
+DEFAULT_NICONICO_ENTRIES = ""  # ニコ生監視の既定入力
+DEFAULT_TIKTOK_ENTRIES = ""  # TikTok監視の既定入力
+DEFAULT_KICK_ENTRIES = ""  # Kick監視の既定入力
+DEFAULT_ABEMA_ENTRIES = ""  # AbemaTV監視の既定入力
+DEFAULT_LIVE17_ENTRIES = ""  # 17LIVE監視の既定入力
+DEFAULT_RADIKO_ENTRIES = ""  # radiko監視の既定入力
+DEFAULT_OPENRECTV_ENTRIES = ""  # OPENREC.tv監視の既定入力
+DEFAULT_BILIBILI_ENTRIES = ""  # bilibili監視の既定入力
+SETTINGS_ORG = "PF"  # 設定の組織名
+SETTINGS_APP = "配信録画くん"  # 設定のアプリ名
+OUTPUT_FORMAT_TS = "ts"  # 出力形式: TS
+OUTPUT_FORMAT_MP4_COPY = "mp4_copy"  # 出力形式: MP4高速コピー
+OUTPUT_FORMAT_MP4_LIGHT = "mp4_light"  # 出力形式: MP4軽量再エンコード
+DEFAULT_OUTPUT_FORMAT = OUTPUT_FORMAT_MP4_COPY  # 既定の出力形式
