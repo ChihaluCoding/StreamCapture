@@ -292,6 +292,27 @@ class MainWindowPreviewMixin:
         self.channel_name_cache[url] = fallback
         return fallback
 
+    def _resolve_preview_tab_label(self, url: str) -> str:
+        cache = getattr(self, "channel_display_name_cache", None)
+        if isinstance(cache, dict):
+            cached = cache.get(url)
+            if cached:
+                return cached
+        display_name = self._resolve_channel_display_name(url)
+        if display_name:
+            if isinstance(cache, dict):
+                cache[url] = display_name
+            return display_name
+        platform_label = derive_platform_label_for_folder(url)
+        if platform_label:
+            if isinstance(cache, dict):
+                cache[url] = platform_label
+            return platform_label
+        fallback = derive_channel_label(url)
+        if isinstance(cache, dict):
+            cache[url] = fallback
+        return fallback
+
     def _get_current_preview_url(self) -> Optional[str]:
         current_widget = self.preview_tabs.currentWidget()
         if current_widget is None:
@@ -436,7 +457,7 @@ class MainWindowPreviewMixin:
         container = QtWidgets.QWidget()
         container_layout = QtWidgets.QVBoxLayout(container)
         container_layout.addWidget(video)
-        label = derive_channel_label(url)
+        label = self._resolve_preview_tab_label(url)
         tab_index = self.preview_tabs.addTab(container, label)
         container.setProperty("preview_url", url)
         self.preview_sessions[url] = {
@@ -485,7 +506,7 @@ class MainWindowPreviewMixin:
             self.url_input.setText(url)
         if reason == "手動" and not self._is_twitch_live_for_preview(url):
             return
-        if "17.live" in url:
+        if "17.live" in url or self._is_twitch_url(url):
             self._show_preview_unavailable(url, reason, select_tab)
             return
         is_whowatch = "whowatch.tv" in url
@@ -639,7 +660,7 @@ class MainWindowPreviewMixin:
         container = QtWidgets.QWidget()
         container_layout = QtWidgets.QVBoxLayout(container)
         container_layout.addWidget(video)
-        label = derive_channel_label(url)
+        label = self._resolve_preview_tab_label(url)
         tab_index = self.preview_tabs.addTab(container, label)
         container.setProperty("preview_url", url)
         self.preview_sessions[url] = {
@@ -716,7 +737,7 @@ class MainWindowPreviewMixin:
         label.setStyleSheet("font-size: 16px; color: #94a3b8;")
         layout.addWidget(label)
         layout.addStretch(1)
-        tab_index = self.preview_tabs.addTab(container, derive_channel_label(url))
+        tab_index = self.preview_tabs.addTab(container, self._resolve_preview_tab_label(url))
         container.setProperty("preview_url", url)
         player = QtMultimedia.QMediaPlayer(self)
         self.preview_sessions[url] = {

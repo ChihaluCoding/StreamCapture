@@ -3,6 +3,7 @@ from __future__ import annotations  # 型ヒントの将来互換対応
 import threading  # 停止フラグ制御
 import time  # リトライ間隔の計測
 from pathlib import Path  # パス操作
+from urllib.parse import urlparse  # URL解析
 from PyQt6 import QtCore, QtGui, QtMultimedia, QtMultimediaWidgets, QtWidgets  # PyQt6の主要モジュール
 from config import (  # 定数群
     DEFAULT_AUTO_CHECK_INTERVAL_SEC,  # 自動監視間隔
@@ -24,6 +25,7 @@ from config import (  # 定数群
     DEFAULT_TWITCASTING_ENTRIES,  # ツイキャス既定
 )
 from platform_utils import (  # 配信サービスURL処理
+    derive_platform_label_for_folder,  # 配信者ラベル抽出
     normalize_platform_urls,  # URL正規化
     normalize_twitch_login,  # Twitch正規化
     normalize_youtube_entry,  # YouTube正規化
@@ -41,7 +43,7 @@ from platform_utils import (  # 配信サービスURL処理
 )
 from recording import resolve_output_path, select_stream  # 録画系ユーティリティ
 from settings_store import load_bool_setting, load_setting_value  # 設定入出力
-from url_utils import merge_unique_urls, parse_auto_url_list  # URL関連ユーティリティ
+from url_utils import derive_channel_label, merge_unique_urls, parse_auto_url_list  # URL関連ユーティリティ
 from workers import AutoCheckWorker, RecorderWorker  # ワーカー処理
 from streamlink_utils import (  # Streamlinkヘッダー調整
     apply_streamlink_options_for_url,  # URL別オプション調整
@@ -51,6 +53,115 @@ from streamlink_utils import (  # Streamlinkヘッダー調整
 
 
 class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
+    def _format_platform_name(self, url: str) -> str:
+        host = urlparse(url).netloc.lower()
+        if "youtube" in host or "youtu.be" in host:
+            return "YouTube"
+        if "twitch" in host:
+            return "Twitch"
+        if "twitcasting.tv" in host:
+            return "ツイキャス"
+        if "nicovideo.jp" in host:
+            return "ニコ生"
+        if "tiktok.com" in host:
+            return "TikTok"
+        if "kick.com" in host:
+            return "Kick"
+        if "abema.tv" in host:
+            return "AbemaTV"
+        if "17.live" in host:
+            return "17LIVE"
+        if "bigo.tv" in host or "bigo.live" in host:
+            return "BIGO"
+        if "radiko.jp" in host:
+            return "radiko"
+        if "openrec.tv" in host:
+            return "OPENREC"
+        if "bilibili.com" in host:
+            return "bilibili"
+        if "whowatch.tv" in host:
+            return "ふわっち"
+        return "不明"
+
+    def _format_recording_label(self, url: str) -> str:
+        platform = self._format_platform_name(url)
+        name = None
+        cache = getattr(self, "channel_display_name_cache", None)
+        if isinstance(cache, dict):
+            name = cache.get(url)
+        if not name and hasattr(self, "_resolve_channel_display_name"):
+            try:
+                name = self._resolve_channel_display_name(url)
+            except Exception:
+                name = None
+            if name and isinstance(cache, dict):
+                cache[url] = name
+        if not name:
+            name = derive_platform_label_for_folder(url) or derive_channel_label(url)
+        return f"{platform} / {name}" if name else platform
+
+    def _ensure_recording_duration_timer(self) -> QtCore.QTimer:
+        timer = getattr(self, "recording_duration_timer", None)
+        if isinstance(timer, QtCore.QTimer):
+            return timer
+        timer = QtCore.QTimer(self)
+        timer.setInterval(1000)
+        timer.timeout.connect(self._update_recording_duration_label)
+        self.recording_duration_timer = timer
+        return timer
+
+    def _format_duration(self, seconds: float) -> str:
+        safe_seconds = max(0, int(seconds))
+        hours = safe_seconds // 3600
+        minutes = (safe_seconds % 3600) // 60
+        secs = safe_seconds % 60
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+    def _update_recording_duration_label(self) -> None:
+        label_widget = getattr(self, "recording_duration_label", None)
+        if not isinstance(label_widget, QtWidgets.QLabel):
+            return
+        now = time.monotonic()
+        lines: list[str] = []
+        manual_started = getattr(self, "manual_recording_started_at", None)
+        if isinstance(manual_started, (int, float)):
+            duration = self._format_duration(now - manual_started)
+            if isinstance(getattr(self, "manual_recording_url", None), str):
+                display_label = self._format_recording_label(self.manual_recording_url)
+                lines.append(f"{display_label}: {duration}")
+            else:
+                lines.append(f"手動: {duration}")
+        auto_sessions = getattr(self, "auto_sessions", {})
+        if isinstance(auto_sessions, dict) and auto_sessions:
+            max_lines = 5
+            for index, (url, session) in enumerate(auto_sessions.items()):
+                if index >= max_lines:
+                    break
+                started_at = session.get("started_at")
+                if not isinstance(started_at, (int, float)):
+                    continue
+                display_label = self._format_recording_label(url)
+                lines.append(f"{display_label}: {self._format_duration(now - started_at)}")
+            remaining = len(auto_sessions) - max_lines
+            if remaining > 0:
+                lines.append(f"他 {remaining}件")
+        if not lines:
+            label_widget.setText("録画時間: 00:00:00")
+        else:
+            label_widget.setText("\n".join(lines))
+
+    def _stop_recording_duration_timer_if_idle(self) -> None:
+        timer = getattr(self, "recording_duration_timer", None)
+        if not isinstance(timer, QtCore.QTimer):
+            return
+        has_manual = getattr(self, "manual_recording_started_at", None)
+        if has_manual is not None:
+            return
+        auto_sessions = getattr(self, "auto_sessions", {})
+        if isinstance(auto_sessions, dict) and auto_sessions:
+            return
+        timer.stop()
+        self._update_recording_duration_label()
     def _configure_auto_monitor(self) -> None:  # 自動監視の設定
         enabled = load_bool_setting("auto_enabled", DEFAULT_AUTO_ENABLED)  # 有効設定を取得
         interval = load_setting_value("auto_check_interval", DEFAULT_AUTO_CHECK_INTERVAL_SEC, int)  # 間隔設定を取得
@@ -350,20 +461,20 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
             "worker": worker,  # ワーカー参照
             "stop_event": stop_event,  # 停止フラグ参照
             "output_path": output_path,  # 出力パス参照
+            "started_at": time.monotonic(),  # 開始時刻
         }  # セッション保存の終了
         self._append_log(f"自動録画開始: {normalized_url} -> {output_path}")  # ログ出力
+        timer = self._ensure_recording_duration_timer()
+        if not timer.isActive():
+            timer.start()
+        self._update_recording_duration_label()
         channel_label = self._resolve_channel_folder_label(normalized_url)  # 配信者名を取得
         self._show_tray_notification(  # 自動録画開始を通知
             "配信録画くん",  # 通知タイトル
             f"{channel_label}さんの配信の録画を開始します。",  # 通知本文
         )  # 通知表示の終了
         if self._is_twitch_url(normalized_url):  # Twitchの場合
-            self._start_recording_preview_from_file(  # 録画ファイルでプレビュー
-                normalized_url,  # URL指定
-                output_path,  # 出力パス指定
-                "自動録画",  # 理由指定
-                False,  # タブを強制選択しない
-            )  # 録画ファイルプレビューの終了
+            self._show_preview_unavailable(normalized_url, "自動録画", False)  # 非対応表示
         elif "17.live" in normalized_url:  # 17LIVEの場合
             self._show_preview_unavailable(normalized_url, "自動録画", False)  # 非対応表示
         else:  # Twitch以外の場合
@@ -392,6 +503,7 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         if not self.auto_sessions and self.stop_event is None:  # 録画が無い場合
             self.stop_button.setEnabled(False)  # 停止ボタンを無効化
         self._update_timeshift_button_state()  # タイムシフトボタン状態を更新
+        self._stop_recording_duration_timer_if_idle()
     def _stop_all_auto_recordings(self) -> None:  # 自動録画の一括停止
         for url, session in list(self.auto_sessions.items()):  # セッションを列挙
             stop_event = session.get("stop_event")  # 停止フラグを取得
@@ -404,6 +516,7 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
                 thread.deleteLater()  # スレッドを破棄
         self.auto_sessions.clear()  # セッション一覧をクリア
         self._update_timeshift_button_state()  # タイムシフトボタン状態を更新
+        self._stop_recording_duration_timer_if_idle()
     def _start_recording(self) -> None:  # 録画開始処理
         url = self.url_input.text().strip()  # URL取得
         if not url:  # URLが空の場合
@@ -447,6 +560,7 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
             self._trigger_auto_check_now()  # すぐに監視を実行
             return  # 処理中断
         self.manual_recording_url = url  # 手動録画URLを記録
+        self.manual_recording_started_at = time.monotonic()
         output_dir = Path(load_setting_value("output_dir", "recordings", str))  # 出力ディレクトリ取得
         output_format = load_setting_value("output_format", DEFAULT_OUTPUT_FORMAT, str)  # 出力形式を取得
         resolved_filename = None  # ファイル名は常に自動命名に任せる
@@ -485,13 +599,12 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         self.start_button.setEnabled(False)  # 開始ボタン無効化
         self.stop_button.setEnabled(True)  # 停止ボタン有効化
         self._update_timeshift_button_state()  # タイムシフトボタン状態を更新
+        timer = self._ensure_recording_duration_timer()
+        if not timer.isActive():
+            timer.start()
+        self._update_recording_duration_label()
         if self._is_twitch_url(url):  # Twitchの場合
-            self._start_recording_preview_from_file(  # 録画ファイルでプレビュー
-                url,  # URL指定
-                output_path,  # 出力パス指定
-                "手動録画",  # 理由指定
-                True,  # タブを選択
-            )  # 録画ファイルプレビューの終了
+            self._show_preview_unavailable(url, "手動録画", True)  # 非対応表示
         elif "17.live" in url:  # 17LIVEの場合
             self._show_preview_unavailable(url, "手動録画", True)  # 非対応表示
         else:  # Twitch以外の場合
@@ -559,6 +672,7 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
             self._stop_preview_for_url(self.manual_recording_url, remove_tab=True)  # 手動録画のプレビューを停止
         self.manual_recording_url = None  # 手動録画URLをクリア
         self.manual_recording_path = None  # 手動録画パスをクリア
+        self.manual_recording_started_at = None
         if self.worker_thread is not None:  # スレッドが存在する場合
             self.worker_thread.quit()  # スレッド終了要求
             self.worker_thread.wait(3000)  # スレッド終了待機
@@ -568,6 +682,7 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         self.start_button.setEnabled(True)  # 開始ボタン有効化
         self.stop_button.setEnabled(False)  # 停止ボタン無効化
         self._update_timeshift_button_state()  # タイムシフトボタン状態を更新
+        self._stop_recording_duration_timer_if_idle()
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # 終了時処理
         if not self._allow_quit and load_bool_setting("tray_enabled", False):  # トレイ常駐時の処理
             if QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():  # トレイが使える場合

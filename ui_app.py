@@ -54,6 +54,7 @@ class MainWindow(  # メインウィンドウ定義
         self.preview_sessions: dict[str, dict] = {}  # プレビューセッション管理
         self.preview_volume = 0.5  # プレビュー音量の既定値
         self.channel_name_cache: dict[str, str] = {}  # 配信者名のキャッシュ
+        self.channel_display_name_cache: dict[str, str] = {}  # 表示名キャッシュ
         self._build_menu()  # メニューバー構築
         self._build_ui()  # UI構築
         self._setup_tray_icon()  # タスクトレイを初期化

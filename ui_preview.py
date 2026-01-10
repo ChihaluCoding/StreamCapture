@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+import datetime as dt
 import subprocess
 import threading
 from pathlib import Path
@@ -99,6 +100,9 @@ class TimeShiftWindow(QtWidgets.QDialog):
         self._playback_path: Path | None = None
         self._dragging_slider = False
         self._clips: list[tuple[int, int]] = []
+        self._segment_ranges: list[tuple[int, int]] = []
+        self._segment_playback: tuple[int, int] | None = None
+        self._last_duration_ms = 0
         self.setWindowTitle("タイムシフト再生")
         self.setMinimumSize(800, 500)
         self._apply_theme()
@@ -107,75 +111,170 @@ class TimeShiftWindow(QtWidgets.QDialog):
         self._apply_source_and_play()
 
     def _apply_theme(self):
-        # モダン・ダークテーマ (プレイヤー専用)
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #0f172a; /* Slate 900 */
-                color: #e2e8f0; /* Slate 200 */
+        palette = QtGui.QGuiApplication.palette()
+        is_dark = palette.color(QtGui.QPalette.ColorRole.Window).lightness() < 128
+        if is_dark:
+            dialog_bg = "#0f172a"
+            control_bg = "#1e293b"
+            control_border = "#334155"
+            base_text = "#e2e8f0"
+            muted_text = "#94a3b8"
+            primary = "#0ea5e9"
+            primary_hover = "#0284c7"
+            ghost_bg = "#1e293b"
+            ghost_hover = "#334155"
+            danger_bg = "#3f1d1d"
+            danger_hover = "#7f1d1d"
+            panel_bg = "#0b1220"
+            panel_border = "#1f2a44"
+            input_bg = "#111827"
+            input_border = "#334155"
+            list_bg = "#0f172a"
+            list_item_bg = "#111827"
+            list_item_border = "#1f2a44"
+            list_item_selected = "#0b2a3a"
+        else:
+            dialog_bg = "#f8fafc"
+            control_bg = "#ffffff"
+            control_border = "#e2e8f0"
+            base_text = "#1e293b"
+            muted_text = "#64748b"
+            primary = "#0ea5e9"
+            primary_hover = "#0284c7"
+            ghost_bg = "#e2e8f0"
+            ghost_hover = "#cbd5e1"
+            danger_bg = "#fee2e2"
+            danger_hover = "#fecaca"
+            panel_bg = "#ffffff"
+            panel_border = "#e2e8f0"
+            input_bg = "#ffffff"
+            input_border = "#cbd5e1"
+            list_bg = "#f8fafc"
+            list_item_bg = "#ffffff"
+            list_item_border = "#e2e8f0"
+            list_item_selected = "#e0f2fe"
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {dialog_bg};
+                color: {base_text};
                 font-family: "Yu Gothic UI", "Segoe UI", sans-serif;
-            }
-            
-            /* コントロールバー背景 */
-            QFrame#ControlBar {
-                background-color: #1e293b; /* Slate 800 */
-                border-top: 1px solid #334155;
+            }}
+            QFrame#ControlBar {{
+                background-color: {control_bg};
+                border-top: 1px solid {control_border};
                 border-bottom-left-radius: 8px;
                 border-bottom-right-radius: 8px;
-            }
-            
-            /* ボタン */
-            QPushButton {
+            }}
+            QPushButton {{
                 background-color: transparent;
                 border: none;
                 border-radius: 4px;
-                color: #e2e8f0;
+                color: {base_text};
                 font-weight: bold;
                 font-size: 13px;
                 padding: 6px 12px;
-            }
-            QPushButton:hover {
-                background-color: #334155;
+            }}
+            QPushButton:hover {{
+                background-color: {control_border};
+                color: {base_text};
+            }}
+            QPushButton#PrimaryButton {{
+                background-color: {primary};
                 color: #ffffff;
-            }
-            QPushButton#PrimaryButton {
-                background-color: #0ea5e9; /* Sky 500 */
-                color: #ffffff;
-            }
-            QPushButton#PrimaryButton:hover {
-                background-color: #0284c7;
-            }
-            
-            /* ラベル */
-            QLabel {
-                color: #94a3b8;
+            }}
+            QPushButton#PrimaryButton:hover {{
+                background-color: {primary_hover};
+            }}
+            QPushButton#GhostButton {{
+                background-color: {ghost_bg};
+                color: {base_text};
+            }}
+            QPushButton#GhostButton:hover {{
+                background-color: {ghost_hover};
+            }}
+            QPushButton#DangerButton {{
+                background-color: {danger_bg};
+                color: {base_text};
+            }}
+            QPushButton#DangerButton:hover {{
+                background-color: {danger_hover};
+                color: {base_text};
+            }}
+            QLabel {{
+                color: {muted_text};
                 font-family: monospace;
                 font-size: 13px;
                 font-weight: bold;
-            }
-            
-            /* シークバー */
-            QSlider::groove:horizontal {
-                border: 1px solid #334155;
+            }}
+            QLabel#SectionTitle {{
+                color: {base_text};
+                font-size: 13px;
+                font-weight: bold;
+                letter-spacing: 0.5px;
+            }}
+            QSlider::groove:horizontal {{
+                border: 1px solid {control_border};
                 height: 6px;
-                background: #1e293b;
+                background: {control_bg};
                 margin: 2px 0;
                 border-radius: 3px;
-            }
-            QSlider::handle:horizontal {
-                background: #0ea5e9;
-                border: 1px solid #0ea5e9;
+            }}
+            QSlider::handle:horizontal {{
+                background: {primary};
+                border: 1px solid {primary};
                 width: 14px;
                 height: 14px;
                 margin: -5px 0;
                 border-radius: 7px;
-            }
-            QSlider::handle:horizontal:hover {
-                background: #38bdf8;
-            }
-            QSlider::sub-page:horizontal {
-                background: #0ea5e9;
+            }}
+            QSlider::handle:horizontal:hover {{
+                background: {primary_hover};
+            }}
+            QSlider::sub-page:horizontal {{
+                background: {primary};
                 border-radius: 3px;
-            }
+            }}
+            QFrame#ClipPanel {{
+                background-color: {panel_bg};
+                border-top: 1px solid {panel_border};
+                border-bottom-left-radius: 8px;
+                border-bottom-right-radius: 8px;
+            }}
+            QLineEdit, QComboBox {{
+                background-color: {input_bg};
+                color: {base_text};
+                border: 1px solid {input_border};
+                border-radius: 6px;
+                padding: 6px 10px;
+            }}
+            QLineEdit:focus, QComboBox:focus {{
+                border: 2px solid {primary};
+                padding: 5px 9px;
+            }}
+            QListWidget {{
+                background-color: {list_bg};
+                border: none;
+                border-radius: 8px;
+                padding: 6px;
+                outline: none;
+            }}
+            QListWidget::item {{
+                background-color: {list_item_bg};
+                border: 1px solid {list_item_border};
+                border-radius: 6px;
+                padding: 8px;
+                margin-bottom: 6px;
+                color: {base_text};
+            }}
+            QListWidget::item:selected {{
+                border: 1px solid {primary};
+                background-color: {list_item_selected};
+                color: {primary};
+                font-weight: bold;
+            }}
+            QListWidget::item:focus {{
+                outline: none;
+            }}
         """)
 
     def _build_ui(self) -> None:
@@ -235,30 +334,63 @@ class TimeShiftWindow(QtWidgets.QDialog):
         clip_panel.setObjectName("ClipPanel")
         clip_layout = QtWidgets.QVBoxLayout(clip_panel)
         clip_layout.setContentsMargins(20, 12, 20, 12)
-        clip_layout.setSpacing(8)
+        clip_layout.setSpacing(10)
+
+        segment_title = QtWidgets.QLabel("10秒ごとの分割（テスト）")
+        segment_title.setObjectName("SectionTitle")
+        clip_layout.addWidget(segment_title)
+
+        segment_row = QtWidgets.QHBoxLayout()
+        segment_row.setSpacing(10)
+        self._segment_list = QtWidgets.QListWidget()
+        self._segment_list.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+        self._segment_list.itemSelectionChanged.connect(self._apply_selected_segment)
+        self._segment_apply_btn = QtWidgets.QPushButton("入力に反映")
+        self._segment_apply_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._segment_apply_btn.setObjectName("GhostButton")
+        self._segment_apply_btn.clicked.connect(self._apply_selected_segment)
+        self._segment_export_btn = QtWidgets.QPushButton("一時保存")
+        self._segment_export_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._segment_export_btn.setObjectName("PrimaryButton")
+        self._segment_export_btn.clicked.connect(self._export_selected_segments)
+        segment_btns = QtWidgets.QVBoxLayout()
+        segment_btns.setSpacing(8)
+        segment_btns.addWidget(self._segment_apply_btn)
+        segment_btns.addWidget(self._segment_export_btn)
+        segment_btns.addStretch(1)
+        segment_row.addWidget(self._segment_list, 1)
+        segment_row.addLayout(segment_btns)
+        clip_layout.addLayout(segment_row)
+
+        clip_title = QtWidgets.QLabel("クリップ作成")
+        clip_title.setObjectName("SectionTitle")
+        clip_layout.addWidget(clip_title)
 
         clip_row = QtWidgets.QHBoxLayout()
-        clip_row.setSpacing(8)
+        clip_row.setSpacing(10)
 
         self._clip_start_input = QtWidgets.QLineEdit()
         self._clip_start_input.setPlaceholderText("開始 MM:SS")
-        self._clip_start_input.setFixedWidth(120)
+        self._clip_start_input.setFixedWidth(140)
 
         self._clip_end_input = QtWidgets.QLineEdit()
         self._clip_end_input.setPlaceholderText("終了 MM:SS")
-        self._clip_end_input.setFixedWidth(120)
+        self._clip_end_input.setFixedWidth(140)
 
         self._clip_start_btn = QtWidgets.QPushButton("開始")
         self._clip_start_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._clip_start_btn.clicked.connect(self._set_clip_start_from_current)
+        self._clip_start_btn.setObjectName("GhostButton")
 
         self._clip_end_btn = QtWidgets.QPushButton("終了")
         self._clip_end_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._clip_end_btn.clicked.connect(self._set_clip_end_from_current)
+        self._clip_end_btn.setObjectName("GhostButton")
 
         self._clip_add_btn = QtWidgets.QPushButton("追加")
         self._clip_add_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._clip_add_btn.clicked.connect(self._add_clip)
+        self._clip_add_btn.setObjectName("PrimaryButton")
 
         clip_row.addWidget(self._clip_start_btn)
         clip_row.addWidget(self._clip_start_input)
@@ -268,8 +400,9 @@ class TimeShiftWindow(QtWidgets.QDialog):
         clip_row.addStretch(1)
 
         format_row = QtWidgets.QHBoxLayout()
-        format_row.setSpacing(8)
+        format_row.setSpacing(10)
         format_label = QtWidgets.QLabel("保存形式")
+        format_label.setObjectName("SectionTitle")
         self._clip_format = QtWidgets.QComboBox()
         self._clip_format.addItems([
             "TS",
@@ -297,14 +430,17 @@ class TimeShiftWindow(QtWidgets.QDialog):
         self._clip_save_selected = QtWidgets.QPushButton("選択を保存")
         self._clip_save_selected.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._clip_save_selected.clicked.connect(self._export_selected_clips)
+        self._clip_save_selected.setObjectName("GhostButton")
 
         self._clip_save_all = QtWidgets.QPushButton("すべて保存")
         self._clip_save_all.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._clip_save_all.clicked.connect(self._export_all_clips)
+        self._clip_save_all.setObjectName("PrimaryButton")
 
         self._clip_remove_btn = QtWidgets.QPushButton("削除")
         self._clip_remove_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._clip_remove_btn.clicked.connect(self._remove_selected_clips)
+        self._clip_remove_btn.setObjectName("DangerButton")
 
         format_row.addWidget(format_label)
         format_row.addWidget(self._clip_format, 1)
@@ -341,6 +477,7 @@ class TimeShiftWindow(QtWidgets.QDialog):
         self._player.durationChanged.connect(self._update_duration)
         self._player.playbackStateChanged.connect(self._update_play_button_text)
         self._player.errorOccurred.connect(self._on_player_error)
+        self._player.mediaStatusChanged.connect(self._on_media_status)
 
     def _apply_source_and_play(self) -> None:
         if not self._recording_path.exists():
@@ -389,11 +526,22 @@ class TimeShiftWindow(QtWidgets.QDialog):
         if self._dragging_slider:
             return
         self._position_slider.setValue(int(position))
-        self._position_label.setText(self._format_position(int(position), int(self._player.duration())))
+        segment = self._segment_playback
+        if segment:
+            start_ms, end_ms = segment
+            total_ms = max(0, end_ms - start_ms)
+            current_ms = max(0, min(total_ms, int(position) - start_ms))
+            self._position_label.setText(self._format_position(current_ms, total_ms))
+        else:
+            self._position_label.setText(self._format_position(int(position), int(self._player.duration())))
+        if position >= self._position_slider.maximum():
+            self._player.pause()
 
     def _update_duration(self, duration: int) -> None:
-        self._position_slider.setRange(0, max(0, int(duration)))
-        self._position_label.setText(self._format_position(int(self._player.position()), int(duration)))
+        if self._segment_playback is None:
+            self._position_slider.setRange(0, max(0, int(duration)))
+            self._position_label.setText(self._format_position(int(self._player.position()), int(duration)))
+        self._maybe_refresh_segments(int(duration))
 
     def _update_play_button_text(self, state: QtMultimedia.QMediaPlayer.PlaybackState) -> None:
         if state == QtMultimedia.QMediaPlayer.PlaybackState.PlayingState:
@@ -407,52 +555,11 @@ class TimeShiftWindow(QtWidgets.QDialog):
         details = self._player.errorString() or "不明なエラー"
         QtWidgets.QMessageBox.information(self, "情報", f"タイムシフト再生に失敗しました: {details}")
 
+    def _on_media_status(self, status: QtMultimedia.QMediaPlayer.MediaStatus) -> None:
+        if status == QtMultimedia.QMediaPlayer.MediaStatus.EndOfMedia:
+            self._player.pause()
+
     def _prepare_timeshift_source(self, input_path: Path, force: bool = False) -> Path:
-        if input_path.suffix.lower() != ".ts":
-            return input_path
-        ffmpeg_path = find_ffmpeg_path()
-        if not ffmpeg_path:
-            return input_path
-        output_path = input_path.with_name(f"{input_path.stem}_timeshift.mp4")
-        if not force and output_path.exists():
-            try:
-                if output_path.stat().st_mtime >= input_path.stat().st_mtime:
-                    return output_path
-            except OSError:
-                pass
-        transcode_command = [
-            ffmpeg_path,
-            "-y",
-            "-i",
-            str(input_path),
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "28",
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "128k",
-            "-movflags",
-            "+faststart",
-            str(output_path),
-        ]
-        result = subprocess.run(
-            transcode_command,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
-        if result.returncode == 0:
-            return output_path
-        stderr_text = "\n".join(result.stderr.splitlines()[-5:]) if result.stderr else "詳細不明"
-        QtWidgets.QMessageBox.information(self, "情報", f"タイムシフト用変換に失敗しました: {stderr_text}")
         return input_path
 
     def _format_position(self, position_ms: int, duration_ms: int) -> str:
@@ -464,6 +571,9 @@ class TimeShiftWindow(QtWidgets.QDialog):
         minutes = total_seconds // 60
         seconds = total_seconds % 60
         return f"{minutes:02d}:{seconds:02d}"
+
+    def _format_clock_time(self, timestamp: dt.datetime) -> str:
+        return timestamp.strftime("%H:%M:%S")
 
     def _parse_time_text(self, text: str) -> Optional[int]:
         raw = text.strip()
@@ -631,6 +741,138 @@ class TimeShiftWindow(QtWidgets.QDialog):
             check=False,
         )
         return result.returncode == 0
+
+    def _maybe_refresh_segments(self, duration_ms: int) -> None:
+        if duration_ms <= 0 or duration_ms == self._last_duration_ms:
+            return
+        self._last_duration_ms = duration_ms
+        self._segment_ranges = self._build_segment_ranges(duration_ms)
+        self._refresh_segment_list()
+
+    def _build_segment_ranges(self, duration_ms: int) -> list[tuple[int, int]]:
+        segment_ms = 10 * 1000
+        ranges: list[tuple[int, int]] = []
+        start = 0
+        while start < duration_ms:
+            end = min(duration_ms, start + segment_ms)
+            ranges.append((start, end))
+            start = end
+        return ranges
+
+    def _recording_start_time(self) -> Optional[dt.datetime]:
+        name = self._recording_path.stem
+        match = QtCore.QRegularExpression(r"(\d{4})年(\d{2})月(\d{2})日-(\d{2})時(\d{2})分(\d{2})秒").match(name)
+        if not match.hasMatch():
+            return None
+        try:
+            return dt.datetime(
+                int(match.captured(1)),
+                int(match.captured(2)),
+                int(match.captured(3)),
+                int(match.captured(4)),
+                int(match.captured(5)),
+                int(match.captured(6)),
+            )
+        except ValueError:
+            return None
+
+    def _refresh_segment_list(self) -> None:
+        self._segment_list.clear()
+        if not self._segment_ranges:
+            placeholder = QtWidgets.QListWidgetItem("00:00:00～00:00:10")
+            placeholder.setFlags(QtCore.Qt.ItemFlag.NoItemFlags)
+            placeholder.setForeground(QtGui.QColor("#94a3b8"))
+            self._segment_list.addItem(placeholder)
+            return
+        start_time = self._recording_start_time()
+        for index, (start_ms, end_ms) in enumerate(self._segment_ranges, start=1):
+            if start_time:
+                start_clock = start_time + dt.timedelta(milliseconds=start_ms)
+                end_clock = start_time + dt.timedelta(milliseconds=end_ms)
+                label = f"{self._format_clock_time(start_clock)}～{self._format_clock_time(end_clock)}"
+            else:
+                label = f"{self._format_time(start_ms)}～{self._format_time(end_ms)}"
+            item = QtWidgets.QListWidgetItem(label)
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, (start_ms, end_ms))
+            self._segment_list.addItem(item)
+
+    def _apply_selected_segment(self) -> None:
+        selected = self._segment_list.selectedItems()
+        if not selected:
+            self._clip_start_input.setText("")
+            self._clip_end_input.setText("")
+            self._segment_playback = None
+            self._seek_segment_range(0, self._player.duration())
+            return
+        start_ms, end_ms = selected[0].data(QtCore.Qt.ItemDataRole.UserRole)
+        self._clip_start_input.setText(self._format_time(start_ms))
+        self._clip_end_input.setText(self._format_time(end_ms))
+        self._segment_playback = (int(start_ms), int(end_ms))
+        self._seek_segment_range(start_ms, end_ms)
+
+    def _export_selected_segments(self) -> None:
+        selected = self._segment_list.selectedItems()
+        if not selected:
+            QtWidgets.QMessageBox.information(self, "情報", "保存する区間を選択してください。")
+            return
+        ffmpeg_path = find_ffmpeg_path()
+        if not ffmpeg_path:
+            QtWidgets.QMessageBox.information(self, "情報", "ffmpegが見つかりません。")
+            return
+        if not self._recording_path.exists():
+            QtWidgets.QMessageBox.information(self, "情報", "録画ファイルが見つかりません。")
+            return
+        success = 0
+        for index, item in enumerate(selected, start=1):
+            start_ms, end_ms = item.data(QtCore.Qt.ItemDataRole.UserRole)
+            duration_sec = max(0.0, (end_ms - start_ms) / 1000.0)
+            start_sec = max(0.0, start_ms / 1000.0)
+            output_path = self._recording_path.with_name(
+                f"{self._recording_path.stem}_part_{index:02d}.ts"
+            )
+            output_path = ensure_unique_path(output_path)
+            command = [
+                ffmpeg_path,
+                "-y",
+                "-ss",
+                f"{start_sec:.3f}",
+                "-i",
+                str(self._recording_path),
+                "-t",
+                f"{duration_sec:.3f}",
+                "-c",
+                "copy",
+                "-f",
+                "mpegts",
+                str(output_path),
+            ]
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            if result.returncode == 0:
+                success += 1
+        QtWidgets.QMessageBox.information(
+            self,
+            "情報",
+            f"区間の一時保存が完了しました: {success} / {len(selected)}",
+        )
+
+    def _seek_segment_range(self, start_ms: int, end_ms: int) -> None:
+        duration = int(self._player.duration())
+        if duration <= 0:
+            return
+        if start_ms < 0:
+            start_ms = 0
+        if end_ms <= 0 or end_ms > duration:
+            end_ms = duration
+        self._position_slider.setRange(int(start_ms), int(end_ms))
+        self._player.setPosition(int(start_ms))
+        self._update_position(int(start_ms))
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         self._player.stop()

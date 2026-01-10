@@ -77,8 +77,7 @@ class MainWindowLayoutMixin:
         self.start_button = QtWidgets.QPushButton("● 録画開始")
         self.start_button.setObjectName("PrimaryButton")
         self.start_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self.start_button.setFixedHeight(64) # かなり大きく
-        self.start_button.setFixedHeight(64) # かなり大きく
+        self.start_button.setFixedHeight(52) # 少し縦幅を抑える
         self.start_button.clicked.connect(self._start_recording)
         btns_layout.addWidget(self.start_button)
 
@@ -86,11 +85,16 @@ class MainWindowLayoutMixin:
         self.stop_button = QtWidgets.QPushButton("■ 停止")
         self.stop_button.setObjectName("DangerButton")
         self.stop_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self.stop_button.setFixedHeight(64)
-        self.stop_button.setFixedHeight(64)
+        self.stop_button.setFixedHeight(52)
         self.stop_button.setEnabled(False)
         self.stop_button.clicked.connect(self._stop_recording)
         btns_layout.addWidget(self.stop_button)
+
+        self.recording_duration_label = QtWidgets.QLabel("録画時間: 00:00:00")
+        self.recording_duration_label.setObjectName("RecordingDurationLabel")
+        self.recording_duration_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+        self.recording_duration_label.setWordWrap(True)
+        btns_layout.addWidget(self.recording_duration_label)
 
         sidebar_layout.addLayout(btns_layout)
 
@@ -355,6 +359,12 @@ class MainWindowLayoutMixin:
             QPushButton#StatusButton:disabled {{
                 color: {c_danger_disabled_text};
                 border-color: {c_danger_disabled_bg};
+            }}
+
+            QLabel#RecordingDurationLabel {{
+                font-size: 12px;
+                color: {c_text_muted};
+                padding-top: 4px;
             }}
 
             /* 右側エリア（モニター・ログ） */
