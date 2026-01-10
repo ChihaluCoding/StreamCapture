@@ -2,8 +2,9 @@
 # -*- coding: utf-8 -*-  # 文字コード指定
 from __future__ import annotations  # 型ヒントの将来互換対応
 import sys  # アプリ終了コード
+from pathlib import Path  # パス操作
 from typing import Iterable  # 型ヒント補助
-from PyQt6 import QtCore, QtWidgets  # PyQt6のGUI基盤
+from PyQt6 import QtCore, QtGui, QtWidgets  # PyQt6のGUI基盤
 from ui_app import MainWindow  # メインウィンドウを読み込み
 
 class _FilteredStderr:  # 標準エラーのフィルタクラス
@@ -51,6 +52,7 @@ def main() -> int:  # エントリポイント
     _install_stderr_filter()  # stderrの警告を抑制
     app = QtWidgets.QApplication(sys.argv)  # アプリケーション生成
     app.setApplicationName("配信録画くん")  # アプリ名設定
+    app.setWindowIcon(QtGui.QIcon(str(Path(__file__).resolve().with_name("icon.ico"))))  # アプリ全体のアイコン
     app.setQuitOnLastWindowClosed(False)  # タスクトレイ常駐に備えて終了を抑制
     window = MainWindow()  # メインウィンドウ生成
     window.show()  # ウィンドウ表示

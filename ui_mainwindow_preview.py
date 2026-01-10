@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import shutil
 import socket
 import threading
 import time
@@ -10,8 +9,10 @@ from urllib.parse import urlparse
 from PyQt6 import QtCore, QtGui, QtMultimedia, QtMultimediaWidgets, QtWidgets
 from streamlink import Streamlink
 from streamlink.exceptions import StreamlinkError
+from api_fuwatch import fetch_fuwatch_display_name_by_scraping
 from api_niconico import fetch_niconico_display_name_by_scraping
 from api_17live import fetch_17live_display_name_by_scraping
+from api_bigo import fetch_bigo_display_name_by_scraping
 from api_tiktok import fetch_tiktok_display_name
 from api_twitch import (
     fetch_twitch_display_name,
@@ -35,14 +36,14 @@ from platform_utils import (
     normalize_twitch_login,
     normalize_youtube_entry,
 )
-from recording import resolve_output_path, select_stream
+from recording import find_ffmpeg_path, resolve_output_path, select_stream
 from settings_store import load_setting_value
 from streamlink_utils import (
     apply_streamlink_options_for_url,
     restore_streamlink_headers,
     set_streamlink_headers_for_url,
 )
-from ytdlp_utils import fetch_stream_url_with_ytdlp
+from ytdlp_utils import fetch_stream_url_with_ytdlp, is_ytdlp_available
 from url_utils import derive_channel_label, safe_filename_component
 from ui_preview import PreviewPipeProxy, StreamlinkPreviewWorker, TimeShiftWindow
 
@@ -142,7 +143,7 @@ class MainWindowPreviewMixin:
         return int(port)
 
     def _create_ffmpeg_preview_process(self, output_url: str) -> Optional[QtCore.QProcess]:
-        ffmpeg_path = shutil.which("ffmpeg")
+        ffmpeg_path = find_ffmpeg_path()
         if not ffmpeg_path:
             self._append_log("プレビューにffmpegが必要です。PATHにffmpegを追加してください。")
             return None
@@ -173,7 +174,7 @@ class MainWindowPreviewMixin:
         return process
 
     def _create_ffmpeg_preview_process_for_url(self, input_url: str, output_url: str) -> Optional[QtCore.QProcess]:
-        ffmpeg_path = shutil.which("ffmpeg")
+        ffmpeg_path = find_ffmpeg_path()
         if not ffmpeg_path:
             self._append_log("プレビューにffmpegが必要です。PATHにffmpegを追加してください。")
             return None
@@ -250,6 +251,12 @@ class MainWindowPreviewMixin:
             return title if title else None
         if "17.live" in host or "17.live" in url:
             title = fetch_17live_display_name_by_scraping(url, self._append_log)
+            return title if title else None
+        if "bigo.tv" in host or "bigo.live" in host or "bigo" in url:
+            title = fetch_bigo_display_name_by_scraping(url, self._append_log)
+            return title if title else None
+        if "whowatch.tv" in host or "whowatch" in url:
+            title = fetch_fuwatch_display_name_by_scraping(url, self._append_log)
             return title if title else None
         return None
 
@@ -481,6 +488,7 @@ class MainWindowPreviewMixin:
         if "17.live" in url:
             self._show_preview_unavailable(url, reason, select_tab)
             return
+        is_whowatch = "whowatch.tv" in url
         use_ffmpeg = self._should_use_ffmpeg_preview(url)
         use_ytdlp_preview = False
         process: QtCore.QProcess | None = None
@@ -490,7 +498,17 @@ class MainWindowPreviewMixin:
         pipe_proxy: PreviewPipeProxy | None = None
         stream_url = None
         preview_url = None
-        if use_ffmpeg:
+        start_delay_ms = 800
+        if is_whowatch and is_ytdlp_available():
+            ytdlp_url = fetch_stream_url_with_ytdlp(url, self._append_log)
+            if not ytdlp_url:
+                self._append_log("ふわっちプレビュー用のURL取得に失敗しました。")
+                return
+            self._append_log(f"ふわっちプレビュー準備: {ytdlp_url}")
+            stream_url = ytdlp_url
+            use_ytdlp_preview = True
+            use_ffmpeg = False
+        elif use_ffmpeg:
             port = self._allocate_preview_tcp_port()
             preview_url = f"tcp://127.0.0.1:{port}"
             output_url = f"tcp://127.0.0.1:{port}?listen=1&listen_timeout=5"
@@ -511,7 +529,8 @@ class MainWindowPreviewMixin:
             pipe_thread.started.connect(pipe_worker.run)
             pipe_thread.start()
         else:
-            stream_url = self._resolve_stream_url(url)
+            if stream_url is None:
+                stream_url = self._resolve_stream_url(url)
             if not stream_url:
                 ytdlp_url = fetch_stream_url_with_ytdlp(url, self._append_log)
                 if not ytdlp_url:
@@ -554,7 +573,7 @@ class MainWindowPreviewMixin:
                 old_proxy.deleteLater()
             
             if use_ffmpeg and isinstance(process, QtCore.QProcess):
-                self._start_player_with_source(player, preview_url, 800)
+                self._start_player_with_source(player, preview_url, start_delay_ms)
                 session["process"] = process
                 session["pipe_stop_event"] = pipe_stop_event
                 session["pipe_thread"] = pipe_thread
@@ -629,7 +648,7 @@ class MainWindowPreviewMixin:
             "seek_to_tail": False,
         }
         if use_ffmpeg and isinstance(process, QtCore.QProcess):
-            self._start_player_with_source(player, preview_url, 800)
+            self._start_player_with_source(player, preview_url, start_delay_ms)
         else:
             player.setSource(QtCore.QUrl(stream_url))
             player.play()
@@ -823,7 +842,6 @@ class MainWindowPreviewMixin:
             return
         session["recording_last_size"] = size
         session["recording_reload_at"] = now
-        self._refresh_recording_file_preview(url, "更新")
 
     def _setup_twitch_refresh_timer(self, url: str) -> None:
         if not self._is_twitch_url(url):
@@ -918,10 +936,15 @@ class MainWindowPreviewMixin:
             return
         file_url = QtCore.QUrl.fromLocalFile(str(path))
         session["seek_to_tail"] = True
-        player.stop()
-        player.setSource(file_url)
-        player.play()
-        session["last_position"] = 0
+        try:
+            player.pause()
+            player.setSource(file_url)
+            player.play()
+        except Exception:
+            player.stop()
+            player.setSource(file_url)
+            player.play()
+        session["last_position"] = int(player.position())
         session["last_position_at"] = time.monotonic()
         session["recording_last_size"] = path.stat().st_size
         session["recording_reload_at"] = time.monotonic()
@@ -995,6 +1018,8 @@ class MainWindowPreviewMixin:
         if session is None:
             return
         if session.get("recording_path"):
+            if self._is_recording_active_for_url(url):
+                return
             self._refresh_recording_file_preview(url, "エラー")
             return
         if not (self._is_twitch_url(url) or session.get("use_ffmpeg")):
@@ -1013,6 +1038,8 @@ class MainWindowPreviewMixin:
                 QtMultimedia.QMediaPlayer.MediaStatus.EndOfMedia,
                 QtMultimedia.QMediaPlayer.MediaStatus.InvalidMedia,
             ):
+                if self._is_recording_active_for_url(url):
+                    return
                 self._refresh_recording_file_preview(url, "EOF")
             return
         if not (self._is_twitch_url(url) or session.get("use_ffmpeg")):

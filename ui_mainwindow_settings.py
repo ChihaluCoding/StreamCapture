@@ -7,6 +7,8 @@ from config import (  # 定数群
     DEFAULT_AUTO_CHECK_INTERVAL_SEC,  # 自動監視間隔
     DEFAULT_AUTO_ENABLED,  # 自動録画の既定
     DEFAULT_ABEMA_ENTRIES,  # AbemaTV既定
+    DEFAULT_BIGO_ENTRIES,  # BIGO LIVE既定
+    DEFAULT_FUWATCH_ENTRIES,  # ふわっち既定
     DEFAULT_LIVE17_ENTRIES,  # 17LIVE既定
     DEFAULT_BILIBILI_ENTRIES,  # bilibili既定
     DEFAULT_KICK_ENTRIES,  # Kick既定
@@ -23,11 +25,13 @@ from config import (  # 定数群
 from platform_utils import (  # 配信サービスURL処理
     normalize_abema_entry,  # AbemaTV正規化
     normalize_17live_entry,  # 17LIVE正規化
+    normalize_fuwatch_entry,  # ふわっち正規化
     normalize_niconico_entry,  # ニコ生正規化
     normalize_kick_entry,  # Kick正規化
     normalize_bilibili_entry,  # bilibili正規化
     normalize_openrectv_entry,  # OPENREC.tv正規化
     normalize_radiko_entry,  # radiko正規化
+    normalize_bigo_entry,  # BIGO LIVE正規化
     normalize_tiktok_entry,  # TikTok正規化
     normalize_twitcasting_entry,  # ツイキャス正規化
     normalize_twitch_login,  # Twitch正規化
@@ -44,9 +48,11 @@ class MainWindowSettingsMixin:  # MainWindowSettingsMixin定義
             "twitcasting": load_setting_value("twitcasting_entries", "", str),  # ツイキャス
             "niconico": load_setting_value("niconico_entries", "", str),  # ニコ生
             "tiktok": load_setting_value("tiktok_entries", "", str),  # TikTok
+            "fuwatch": load_setting_value("fuwatch_entries", "", str),  # ふわっち
             "kick": load_setting_value("kick_entries", "", str),  # Kick
             "abema": load_setting_value("abema_entries", "", str),  # AbemaTV
             "17live": load_setting_value("live17_entries", "", str),  # 17LIVE
+            "bigo": load_setting_value("bigo_entries", "", str),  # BIGO LIVE
             "radiko": load_setting_value("radiko_entries", "", str),  # radiko
             "openrectv": load_setting_value("openrectv_entries", "", str),  # OPENREC.tv
             "bilibili": load_setting_value("bilibili_entries", "", str),  # bilibili
@@ -63,9 +69,11 @@ class MainWindowSettingsMixin:  # MainWindowSettingsMixin定義
             "twitcasting": "twitcasting_entries",  # ツイキャス
             "niconico": "niconico_entries",  # ニコ生
             "tiktok": "tiktok_entries",  # TikTok
+            "fuwatch": "fuwatch_entries",  # ふわっち
             "kick": "kick_entries",  # Kick
             "abema": "abema_entries",  # AbemaTV
             "17live": "live17_entries",  # 17LIVE
+            "bigo": "bigo_entries",  # BIGO LIVE
             "radiko": "radiko_entries",  # radiko
             "openrectv": "openrectv_entries",  # OPENREC.tv
             "bilibili": "bilibili_entries",  # bilibili
@@ -110,9 +118,11 @@ class MainWindowSettingsMixin:  # MainWindowSettingsMixin定義
             "twitcasting": [],  # ツイキャス
             "niconico": [],  # ニコ生
             "tiktok": [],  # TikTok
+            "fuwatch": [],  # ふわっち
             "kick": [],  # Kick
             "abema": [],  # AbemaTV
             "17live": [],  # 17LIVE
+            "bigo": [],  # BIGO LIVE
             "radiko": [],  # radiko
             "openrectv": [],  # OPENREC.tv
             "bilibili": [],  # bilibili
@@ -158,6 +168,8 @@ class MainWindowSettingsMixin:  # MainWindowSettingsMixin定義
             audio = session.get("audio")  # 音声出力を取得
             if isinstance(audio, QtMultimedia.QAudioOutput):  # 音声出力がある場合
                 audio.setVolume(float(self.preview_volume))  # 音量を反映
+        if hasattr(self, "_apply_log_panel_visibility"):
+            self._apply_log_panel_visibility()
     def _open_settings_dialog(self) -> None:  # 設定ダイアログ表示
         dialog = SettingsDialog(self)  # 設定ダイアログ生成
         if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:  # OK時の処理

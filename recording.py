@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-  # 文字コード指定
 from __future__ import annotations  # 型ヒントの将来互換対応
+import os  # 環境変数
 import shutil  # 実行ファイル探索
 import subprocess  # 外部コマンド実行
 import threading  # 停止フラグ制御
@@ -12,6 +13,11 @@ from config import (  # 定数を読み込み
     DEFAULT_OUTPUT_FORMAT,  # 出力形式の既定値
     DEFAULT_QUALITY,  # 既定の画質指定
     FLUSH_INTERVAL_SEC,  # 定期フラッシュ間隔
+    OUTPUT_FORMAT_FLV,  # 出力形式: FLV
+    OUTPUT_FORMAT_MKV,  # 出力形式: MKV
+    OUTPUT_FORMAT_MOV,  # 出力形式: MOV
+    OUTPUT_FORMAT_MP3,  # 出力形式: MP3
+    OUTPUT_FORMAT_WAV,  # 出力形式: WAV
     OUTPUT_FORMAT_MP4_COPY,  # 出力形式: MP4高速コピー
     OUTPUT_FORMAT_MP4_LIGHT,  # 出力形式: MP4軽量再エンコード
     OUTPUT_FORMAT_TS,  # 出力形式: TS
@@ -24,6 +30,16 @@ from url_utils import (  # URL関連ユーティリティを読み込み
     derive_channel_label,  # 配信者ラベル推定
 )
 from ytdlp_utils import fetch_stream_url_with_ytdlp, is_ytdlp_available  # yt-dlp補助
+from settings_store import load_bool_setting  # 設定読み込み
+
+def find_ffmpeg_path() -> Optional[str]:  # ffmpegのパスを解決
+    env_path = os.environ.get("FFMPEG_PATH", "").strip()  # 環境変数優先
+    if env_path and Path(env_path).exists():
+        return env_path
+    preferred = Path("C:/ffmpeg/bin/ffmpeg.exe")  # 既定の優先パス
+    if preferred.exists():
+        return str(preferred)
+    return shutil.which("ffmpeg")  # PATHを検索
 
 def resolve_output_path(  # 出力パス決定
     output_dir: Path,  # 出力ディレクトリ
@@ -49,25 +65,41 @@ def resolve_output_path(  # 出力パス決定
 
 def normalize_output_format(output_format: str) -> str:  # 出力形式の正規化
     cleaned = str(output_format).strip().lower()  # 文字列を正規化
-    if cleaned in (OUTPUT_FORMAT_TS, OUTPUT_FORMAT_MP4_COPY, OUTPUT_FORMAT_MP4_LIGHT):  # 対応形式の場合
+    if cleaned in (
+        OUTPUT_FORMAT_TS,
+        OUTPUT_FORMAT_MP4_COPY,
+        OUTPUT_FORMAT_MP4_LIGHT,
+        OUTPUT_FORMAT_MOV,
+        OUTPUT_FORMAT_FLV,
+        OUTPUT_FORMAT_MKV,
+        OUTPUT_FORMAT_MP3,
+        OUTPUT_FORMAT_WAV,
+    ):  # 対応形式の場合
         return cleaned  # 正規化済み形式を返却
     return DEFAULT_OUTPUT_FORMAT  # 既定形式にフォールバック
 
-def build_mp4_output_path(input_path: Path) -> Path:  # MP4出力パス生成
+def build_output_path(input_path: Path, suffix: str) -> Path:  # 出力パス生成
     base = input_path.with_suffix("")  # 拡張子を除いたベース
-    candidate = input_path.with_suffix(".mp4")  # 既定のMP4出力パス
+    candidate = input_path.with_suffix(suffix)  # 既定の出力パス
     if not candidate.exists():  # 既定パスが未使用の場合
         return candidate  # 既定パスを返却
     for index in range(1, 1000):  # 衝突回避の連番
-        candidate = base.with_name(f"{base.name}_{index}").with_suffix(".mp4")  # 連番付きパス
+        candidate = base.with_name(f"{base.name}_{index}").with_suffix(suffix)  # 連番付きパス
         if not candidate.exists():  # 未使用のパスが見つかった場合
             return candidate  # そのパスを返却
-    return base.with_name(f"{base.name}_overflow").with_suffix(".mp4")  # 最終手段のパス
+    return base.with_name(f"{base.name}_overflow").with_suffix(suffix)  # 最終手段のパス
+
+def build_mp4_output_path(input_path: Path) -> Path:  # MP4出力パス生成
+    return build_output_path(input_path, ".mp4")
 
 def delete_source_ts(  # 変換後のTS削除処理
     input_path: Path,  # 入力パス
     status_cb: Optional[Callable[[str], None]] = None,  # 状態通知コールバック
 ) -> None:  # 返り値なし
+    if load_bool_setting("keep_ts_file", False):  # TS保持設定
+        if status_cb is not None:
+            status_cb("設定によりTSファイルを保持します。")
+        return
     if input_path.suffix.lower() != ".ts":  # TS以外は対象外
         return  # 何もしない
     if not input_path.exists():  # 既に削除済みの場合
@@ -94,7 +126,7 @@ def convert_to_mp4(  # MP4変換処理
         if status_cb is not None:  # コールバックが指定されている場合
             status_cb(message)  # 状態通知
         return None  # 変換不可
-    ffmpeg_path = shutil.which("ffmpeg")  # ffmpegのパスを探索
+    ffmpeg_path = find_ffmpeg_path()  # ffmpegのパスを探索
     if not ffmpeg_path:  # ffmpegが見つからない場合
         message = "ffmpegが見つかりません。PATHにffmpegを追加してください。"  # 通知文
         if status_cb is not None:  # コールバックが指定されている場合
@@ -199,7 +231,7 @@ def convert_to_mp4_light(  # MP4軽量変換処理
         if status_cb is not None:  # コールバックが指定されている場合
             status_cb(message)  # 状態通知
         return None  # 変換不可
-    ffmpeg_path = shutil.which("ffmpeg")  # ffmpegのパスを探索
+    ffmpeg_path = find_ffmpeg_path()  # ffmpegのパスを探索
     if not ffmpeg_path:  # ffmpegが見つからない場合
         message = "ffmpegが見つかりません。PATHにffmpegを追加してください。"  # 通知文
         if status_cb is not None:  # コールバックが指定されている場合
@@ -252,6 +284,119 @@ def convert_to_mp4_light(  # MP4軽量変換処理
     delete_source_ts(input_path, status_cb=status_cb)  # 元TSファイルを削除
     return output_path  # 出力パスを返却
 
+def convert_to_container_copy(  # コンテナ変換（コピー）
+    input_path: Path,  # 入力パス
+    suffix: str,  # 出力拡張子
+    status_cb: Optional[Callable[[str], None]] = None,  # 状態通知コールバック
+) -> Optional[Path]:  # 返り値は出力パス
+    if not input_path.exists():  # 入力ファイルが無い場合
+        message = f"変換対象ファイルが存在しません: {input_path}"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    if input_path.stat().st_size == 0:  # サイズがゼロの場合
+        message = f"変換対象ファイルが空です: {input_path}"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    ffmpeg_path = find_ffmpeg_path()
+    if not ffmpeg_path:
+        message = "ffmpegが見つかりません。PATHにffmpegを追加してください。"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    output_path = build_output_path(input_path, suffix)
+    message = f"{suffix[1:].upper()}変換を開始します: {output_path}"
+    if status_cb is not None:
+        status_cb(message)
+    command = [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        str(input_path),
+        "-c",
+        "copy",
+        str(output_path),
+    ]
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode != 0:
+        stderr_text = "\n".join(result.stderr.strip().splitlines()[-5:]) if result.stderr else "詳細不明"
+        message = f"{suffix[1:].upper()}変換に失敗しました: {stderr_text}"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    message = f"{suffix[1:].upper()}変換が完了しました: {output_path}"
+    if status_cb is not None:
+        status_cb(message)
+    delete_source_ts(input_path, status_cb=status_cb)
+    return output_path
+
+def convert_to_audio(  # 音声変換処理
+    input_path: Path,  # 入力パス
+    suffix: str,  # 出力拡張子
+    status_cb: Optional[Callable[[str], None]] = None,  # 状態通知コールバック
+) -> Optional[Path]:  # 返り値は出力パス
+    if not input_path.exists():
+        message = f"変換対象ファイルが存在しません: {input_path}"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    if input_path.stat().st_size == 0:
+        message = f"変換対象ファイルが空です: {input_path}"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    ffmpeg_path = find_ffmpeg_path()
+    if not ffmpeg_path:
+        message = "ffmpegが見つかりません。PATHにffmpegを追加してください。"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    output_path = build_output_path(input_path, suffix)
+    fmt_label = suffix[1:].upper()
+    message = f"{fmt_label}変換を開始します: {output_path}"
+    if status_cb is not None:
+        status_cb(message)
+    audio_codec = "libmp3lame" if suffix == ".mp3" else "pcm_s16le"
+    command = [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-c:a",
+        audio_codec,
+        "-b:a",
+        "192k",
+        str(output_path),
+    ]
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode != 0:
+        stderr_text = "\n".join(result.stderr.strip().splitlines()[-5:]) if result.stderr else "詳細不明"
+        message = f"{fmt_label}変換に失敗しました: {stderr_text}"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    message = f"{fmt_label}変換が完了しました: {output_path}"
+    if status_cb is not None:
+        status_cb(message)
+    delete_source_ts(input_path, status_cb=status_cb)
+    return output_path
+
 def convert_recording(  # 出力形式に合わせた変換
     input_path: Path,  # 入力パス
     output_format: str,  # 出力形式指定
@@ -265,6 +410,16 @@ def convert_recording(  # 出力形式に合わせた変換
         return input_path  # TSはそのまま返却
     if normalized_format == OUTPUT_FORMAT_MP4_LIGHT:  # 軽量MP4指定の場合
         return convert_to_mp4_light(input_path, status_cb=status_cb)  # 軽量変換を実行
+    if normalized_format == OUTPUT_FORMAT_MOV:  # MOV指定
+        return convert_to_container_copy(input_path, ".mov", status_cb=status_cb)
+    if normalized_format == OUTPUT_FORMAT_FLV:  # FLV指定
+        return convert_to_container_copy(input_path, ".flv", status_cb=status_cb)
+    if normalized_format == OUTPUT_FORMAT_MKV:  # MKV指定
+        return convert_to_container_copy(input_path, ".mkv", status_cb=status_cb)
+    if normalized_format == OUTPUT_FORMAT_MP3:  # MP3指定
+        return convert_to_audio(input_path, ".mp3", status_cb=status_cb)
+    if normalized_format == OUTPUT_FORMAT_WAV:  # WAV指定
+        return convert_to_audio(input_path, ".wav", status_cb=status_cb)
     return convert_to_mp4(input_path, status_cb=status_cb)  # 高品質コピーMP4を実行
 
 def select_stream(available_streams: dict, quality: str):  # ストリーム選択
@@ -288,6 +443,7 @@ def open_stream_with_retry(  # リトライ付きでストリームを開く
     status_cb: Optional[Callable[[str], None]],  # 状態通知コールバック
 ):  # 関数定義終了
     attempt = 0  # 試行回数カウンタ
+    is_whowatch = "whowatch.tv" in url  # ふわっちURL判定
     while True:  # リトライループ
         if should_stop(stop_event):  # 停止要求の確認
             return None  # 停止時は取得を中断
@@ -298,10 +454,16 @@ def open_stream_with_retry(  # リトライ付きでストリームを開く
             message = f"ストリーム取得に失敗しました: {exc}"  # メッセージ生成
             if status_cb is not None:  # コールバックが指定されている場合
                 status_cb(message)  # 状態通知
+            if "No plugin can handle URL" in str(exc):  # 未対応URLの場合
+                raise RuntimeError("StreamlinkがこのURLに対応していません。") from exc  # 即時フォールバック
+            if is_whowatch and is_ytdlp_available():  # ふわっちはyt-dlpへ切替
+                raise RuntimeError("Streamlinkで取得に失敗したためyt-dlpに切り替えます。") from exc
             streams = {}  # 空辞書に退避
         if streams:  # ストリームが取得できた場合
             stream = select_stream(streams, quality)  # ストリームを選択
             return stream  # 選択結果を返却
+        if is_whowatch and is_ytdlp_available():  # ふわっちは空の場合も即切替
+            raise RuntimeError("Streamlinkでストリームが見つからないためyt-dlpに切り替えます。")
         if attempt > retry_count:  # リトライ回数を超えた場合
             raise RuntimeError("ストリームを取得できませんでした。")  # 例外送出
         message = f"{retry_wait}秒待機して再試行します（{attempt}/{retry_count}）..."  # 待機通知
@@ -334,7 +496,7 @@ def _record_stream_with_ytdlp(  # yt-dlpで録画処理
     stream_url = fetch_stream_url_with_ytdlp(url, status_cb)  # m3u8等のURLを取得
     if not stream_url:  # 取得失敗時
         return False  # 失敗を返却
-    ffmpeg_path = shutil.which("ffmpeg")  # ffmpegを探索
+    ffmpeg_path = find_ffmpeg_path()  # ffmpegを探索
     if not ffmpeg_path:  # ffmpegが無い場合
         if status_cb is not None:  # コールバックが指定されている場合
             status_cb("ffmpegが見つかりません。PATHにffmpegを追加してください。")  # 通知
@@ -387,7 +549,38 @@ def _record_stream_with_ytdlp(  # yt-dlpで録画処理
             process.kill()  # 強制終了
             _, stderr = process.communicate()  # 出力を回収
         if process.returncode not in (0, None) and not stopped:  # 失敗時
-            tail = "\n".join((stderr or "").splitlines()[-5:]) if stderr else "詳細不明"  # エラー末尾
+            stderr_text = stderr or ""  # エラー全文
+            if "Unrecognized option 'reconnect'" in stderr_text:  # 古いffmpeg向け
+                if status_cb is not None:  # コールバックが指定されている場合
+                    status_cb("ffmpegが-reconnectに未対応のため再試行します。")  # 再試行通知
+                fallback_command = [  # 再試行コマンド
+                    ffmpeg_path,
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    stream_url,
+                    "-c",
+                    "copy",
+                    "-f",
+                    "mpegts",
+                    str(output_path),
+                ]
+                retry = subprocess.run(  # 再試行
+                    fallback_command,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )
+                if retry.returncode == 0:
+                    return True
+                retry_tail = "\n".join((retry.stderr or "").splitlines()[-5:]) if retry.stderr else "詳細不明"
+                if status_cb is not None:
+                    status_cb(f"yt-dlp経由の録画に失敗しました: {retry_tail}")
+                return False
+            tail = "\n".join(stderr_text.splitlines()[-5:]) if stderr_text else "詳細不明"  # エラー末尾
             if status_cb is not None:  # コールバックが指定されている場合
                 status_cb(f"yt-dlp経由の録画に失敗しました: {tail}")  # 通知
             return False  # 失敗
@@ -411,6 +604,13 @@ def record_stream(  # 録画処理
     if status_cb is not None:  # コールバックが指定されている場合
         status_cb(start_message)  # 開始通知
         status_cb(output_message)  # 出力先通知
+    if "whowatch.tv" in url and is_ytdlp_available():  # ふわっちはyt-dlpで録画
+        if status_cb is not None:  # コールバックが指定されている場合
+            status_cb("ふわっちはyt-dlpで録画を開始します。")  # 方式通知
+        if not _record_stream_with_ytdlp(url, output_path, stop_event, status_cb):  # yt-dlp録画
+            if status_cb is not None:  # コールバックが指定されている場合
+                status_cb("yt-dlpで録画できませんでした。")  # 失敗通知
+        return  # ふわっちはStreamlinkを使わない
     last_flush_time = time.time()  # 最終フラッシュ時刻
     total_written = 0  # 総書き込みバイト数を初期化
     output_file = None  # 出力ファイル参照
@@ -435,6 +635,8 @@ def record_stream(  # 録画処理
                 message = f"ストリームを取得できませんでした: {exc}"  # 取得失敗通知
                 if status_cb is not None:  # コールバックが指定されている場合
                     status_cb(message)  # 状態通知
+                if status_cb is not None:  # コールバックが指定されている場合
+                    status_cb("Streamlinkが失敗したためyt-dlpで録画を試行します。")  # フォールバック通知
                 if _record_stream_with_ytdlp(url, output_path, stop_event, status_cb):  # yt-dlpへ切替
                     return  # ffmpeg録画に任せて終了
                 break  # 録画ループを終了

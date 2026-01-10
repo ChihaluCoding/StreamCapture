@@ -5,6 +5,17 @@ from settings_store import load_bool_setting  # 設定読み込み
 
 
 class MainWindowLoggingMixin:  # MainWindowLoggingMixin定義
+    def _apply_log_panel_visibility(self) -> None:  # ログパネル表示切り替え
+        visible = load_bool_setting("log_panel_visible", False)
+        log_frame = getattr(self, "log_frame", None)
+        splitter = getattr(self, "main_splitter", None)
+        if isinstance(log_frame, QtWidgets.QWidget):
+            log_frame.setVisible(bool(visible))
+        if isinstance(splitter, QtWidgets.QSplitter):
+            if visible:
+                splitter.setSizes([650, 350])
+            else:
+                splitter.setSizes([1000, 0])
     def _format_log_message(self, message: str) -> tuple[str, str]:  # ログを読みやすく整形
         raw = str(message).strip()  # 文字列化して余白を削除
         if not raw:  # 空文字の場合

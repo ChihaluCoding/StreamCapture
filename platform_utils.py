@@ -136,6 +136,18 @@ def normalize_abema_entry(entry: str) -> Optional[str]:  # AbemaTV入力の正�
         return cleaned  # URLをそのまま返却
     return None  # 変換不可
 
+def normalize_fuwatch_entry(entry: str) -> Optional[str]:  # ふわっち入力の正規化
+    cleaned = entry.strip()  # 文字列を正規化
+    if not cleaned:  # 空の場合
+        return None  # 変換不可
+    if "://" not in cleaned and "whowatch.tv" in cleaned:  # スキーム無しURLの場合
+        cleaned = f"https://{cleaned}"  # httpsを補完
+    parsed = urlparse(cleaned)  # URLを解析
+    host = parsed.netloc.lower()  # ホストを取得
+    if host and "whowatch.tv" in host and parsed.path:  # ふわっちURLの場合
+        return cleaned  # URLをそのまま返却
+    return None  # 変換不可
+
 def normalize_17live_entry(entry: str) -> Optional[str]:  # 17LIVE入力の正規化
     cleaned = entry.strip()  # 文字列を正規化
     if not cleaned:  # 空の場合
@@ -146,6 +158,24 @@ def normalize_17live_entry(entry: str) -> Optional[str]:  # 17LIVE入力の正�
     host = parsed.netloc.lower()  # ホストを取得
     if host and "17.live" in host and parsed.path:  # 17LIVE URLの場合
         return cleaned  # URLをそのまま返却
+    return None  # 変換不可
+
+def normalize_bigo_entry(entry: str) -> Optional[str]:  # BIGO LIVE入力の正規化
+    cleaned = entry.strip()  # 文字列を正規化
+    if not cleaned:  # 空の場合
+        return None  # 変換不可
+    if "://" not in cleaned and ("bigo.tv" in cleaned or "bigo.live" in cleaned):  # スキーム無しURLの場合
+        cleaned = f"https://{cleaned}"  # httpsを補完
+    parsed = urlparse(cleaned)  # URLを解析
+    host = parsed.netloc.lower()  # ホストを取得
+    path_parts = [part for part in parsed.path.split("/") if part]  # パス要素を取得
+    if host and ("bigo.tv" in host or "bigo.live" in host) and parsed.path:  # BIGO LIVE URLの場合
+        return cleaned  # URLをそのまま返却
+    if not host and cleaned and "://" not in cleaned and "/" not in cleaned:  # IDのみの場合
+        cleaned = cleaned.lstrip("@")  # 先頭の@を削除
+        if not cleaned:  # 空になった場合
+            return None  # 変換不可
+        return f"https://www.bigo.tv/user/{cleaned}"  # 正規URLを返却
     return None  # 変換不可
 
 def normalize_radiko_entry(entry: str) -> Optional[str]:  # radiko入力の正規化
@@ -226,9 +256,23 @@ def derive_platform_label_for_folder(url: str) -> Optional[str]:  # フォルダ
         if path_parts[0] == "r" and len(path_parts) > 1:  # /r/room形式
             return path_parts[1]  # ルーム名を返却
         return path_parts[-1]  # 末尾パスを返却
+    if host and "whowatch.tv" in host and path_parts:  # ふわっちの場合
+        if path_parts[0] in ("viewer", "profile", "live") and len(path_parts) > 1:
+            return path_parts[1]
+        return path_parts[-1]
     if host and "17.live" in host and path_parts:  # 17LIVEの場合
         if "live" in path_parts:  # /live/ID形式
             idx = path_parts.index("live")
+            if len(path_parts) > idx + 1:
+                return path_parts[idx + 1]
+        return path_parts[-1]
+    if host and ("bigo.tv" in host or "bigo.live" in host) and path_parts:  # BIGO LIVEの場合
+        if "user" in path_parts:  # /ja/user/ID など
+            idx = path_parts.index("user")
+            if len(path_parts) > idx + 1:
+                return path_parts[idx + 1]
+        if "u" in path_parts:  # /u/ID 形式
+            idx = path_parts.index("u")
             if len(path_parts) > idx + 1:
                 return path_parts[idx + 1]
         return path_parts[-1]

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+from pathlib import Path
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 class MainWindowLayoutMixin:
@@ -29,10 +30,23 @@ class MainWindowLayoutMixin:
         sidebar_layout.setSpacing(24)
 
         # --- タイトルロゴ ---
-        title_label = QtWidgets.QLabel("配信録画くん\nPRO")  # 日本語タイトルに変更
-        title_label.setObjectName("SidebarTitle")
-        title_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
-        sidebar_layout.addWidget(title_label)
+        logo_label = QtWidgets.QLabel()
+        logo_label.setObjectName("SidebarTitle")
+        logo_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+        logo_label.setContentsMargins(-8, 0, 0, 0)
+        logo_path = Path(__file__).resolve().parent / "logo.png"
+        pixmap = QtGui.QPixmap(str(logo_path))
+        if not pixmap.isNull():
+            max_width = 280
+            scaled = pixmap.scaledToWidth(
+                max_width,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+            logo_label.setPixmap(scaled)
+            logo_label.setFixedHeight(scaled.height())
+        else:
+            logo_label.setText("配信録画くん")
+        sidebar_layout.addWidget(logo_label)
 
         # --- URL入力エリア ---
         url_group = QtWidgets.QWidget()
@@ -47,6 +61,7 @@ class MainWindowLayoutMixin:
         self.url_input = QtWidgets.QLineEdit()
         self.url_input.setPlaceholderText("URLを入力...")
         self.url_input.setObjectName("UrlInput")
+        self.url_input.setMinimumHeight(44)
         self.url_input.setMinimumHeight(44)
         url_layout.addWidget(self.url_input)
 
@@ -63,6 +78,7 @@ class MainWindowLayoutMixin:
         self.start_button.setObjectName("PrimaryButton")
         self.start_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.start_button.setFixedHeight(64) # かなり大きく
+        self.start_button.setFixedHeight(64) # かなり大きく
         self.start_button.clicked.connect(self._start_recording)
         btns_layout.addWidget(self.start_button)
 
@@ -70,6 +86,7 @@ class MainWindowLayoutMixin:
         self.stop_button = QtWidgets.QPushButton("■ 停止")
         self.stop_button.setObjectName("DangerButton")
         self.stop_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.stop_button.setFixedHeight(64)
         self.stop_button.setFixedHeight(64)
         self.stop_button.setEnabled(False)
         self.stop_button.clicked.connect(self._stop_recording)
@@ -119,7 +136,7 @@ class MainWindowLayoutMixin:
         monitor_layout.setSpacing(0)
 
         # モニターヘッダー
-        mon_header_lbl = QtWidgets.QLabel("  ライブモニター")  # セクション名を日本語化
+        mon_header_lbl = QtWidgets.QLabel("ライブプレビュー")  # セクション名を日本語化
         mon_header_lbl.setObjectName("SectionHeader")
         monitor_layout.addWidget(mon_header_lbl)
 
@@ -130,13 +147,14 @@ class MainWindowLayoutMixin:
 
         # --- 下部: ログエリア (ターミナル風) ---
         log_frame = QtWidgets.QFrame()
+        self.log_frame = log_frame
         log_frame.setObjectName("LogFrame")
         log_layout = QtWidgets.QVBoxLayout(log_frame)
         log_layout.setContentsMargins(0, 0, 0, 0)
         log_layout.setSpacing(0)
 
         # ログヘッダー
-        log_header_lbl = QtWidgets.QLabel("  システムログ")  # セクション名を日本語化
+        log_header_lbl = QtWidgets.QLabel("ログ")  # セクション名を日本語化
         log_header_lbl.setObjectName("SectionHeader")
         log_layout.addWidget(log_header_lbl)
 
@@ -148,6 +166,7 @@ class MainWindowLayoutMixin:
 
         # スプリッターで上下分割 (モニター優先)
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        self.main_splitter = splitter
         splitter.setObjectName("RightSplitter")
         splitter.setHandleWidth(1)
         splitter.addWidget(monitor_frame)
@@ -223,7 +242,7 @@ class MainWindowLayoutMixin:
             c_log_bg = "#0f172a"
             c_log_text = "#e2e8f0"
 
-        font_main = '"BIZ UDPゴシック", "Yu Gothic UI", "Meiryo", sans-serif'  # 日本語表示に最適化したフォント
+        font_main = '"Noto Sans JP", "Meiryo UI", "Meiryo", "Segoe UI", sans-serif'  # 日本語表示に最適化したフォント
         font_mono = '"Consolas", "Monaco", monospace'  # 等幅フォントは既存を維持
 
         self.setStyleSheet(f"""
@@ -244,11 +263,10 @@ class MainWindowLayoutMixin:
             }}
             QLabel#SidebarTitle {{
                 font-size: 28px;
-                font-weight: 900;
+                font-weight: 700;
                 color: {c_primary};
                 line-height: 1.2;
-                font-style: italic;
-                font-family: "BIZ UDPゴシック", "Yu Gothic UI", "Meiryo", sans-serif;
+                font-family: {font_main};
             }}
             QLabel#FieldLabel {{
                 font-size: 12px;

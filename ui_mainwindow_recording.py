@@ -8,8 +8,10 @@ from config import (  # 定数群
     DEFAULT_AUTO_CHECK_INTERVAL_SEC,  # 自動監視間隔
     DEFAULT_AUTO_ENABLED,  # 自動録画の既定
     DEFAULT_ABEMA_ENTRIES,  # AbemaTV既定
+    DEFAULT_BIGO_ENTRIES,  # BIGO LIVE既定
     DEFAULT_LIVE17_ENTRIES,  # 17LIVE既定
     DEFAULT_BILIBILI_ENTRIES,  # bilibili既定
+    DEFAULT_FUWATCH_ENTRIES,  # ふわっち既定
     DEFAULT_KICK_ENTRIES,  # Kick既定
     DEFAULT_NICONICO_ENTRIES,  # ニコ生既定
     DEFAULT_OPENRECTV_ENTRIES,  # OPENREC.tv既定
@@ -28,8 +30,10 @@ from platform_utils import (  # 配信サービスURL処理
     normalize_niconico_entry,  # ニコ生正規化
     normalize_twitcasting_entry,  # ツイキャス正規化
     normalize_tiktok_entry,  # TikTok正規化
+    normalize_fuwatch_entry,  # ふわっち正規化
     normalize_kick_entry,  # Kick正規化
     normalize_abema_entry,  # AbemaTV正規化
+    normalize_bigo_entry,  # BIGO LIVE正規化
     normalize_17live_entry,  # 17LIVE正規化
     normalize_radiko_entry,  # radiko正規化
     normalize_openrectv_entry,  # OPENREC.tv正規化
@@ -66,9 +70,11 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         twitcasting_urls = self._get_auto_twitcasting_urls()  # ツイキャスURL一覧を取得
         niconico_urls = self._get_auto_niconico_urls()  # ニコ生URL一覧を取得
         tiktok_urls = self._get_auto_tiktok_urls()  # TikTok URL一覧を取得
+        fuwatch_urls = self._get_auto_fuwatch_urls()  # ふわっちURL一覧を取得
         kick_urls = self._get_auto_kick_urls()  # Kick URL一覧を取得
         abema_urls = self._get_auto_abema_urls()  # AbemaTV URL一覧を取得
         live17_urls = self._get_auto_17live_urls()  # 17LIVE URL一覧を取得
+        bigo_urls = self._get_auto_bigo_urls()  # BIGO LIVE URL一覧を取得
         radiko_urls = self._get_auto_radiko_urls()  # radiko URL一覧を取得
         openrectv_urls = self._get_auto_openrectv_urls()  # OPENREC.tv URL一覧を取得
         bilibili_urls = self._get_auto_bilibili_urls()  # bilibili URL一覧を取得
@@ -76,9 +82,11 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
             twitcasting_urls,  # ツイキャスURL一覧
             niconico_urls,  # ニコ生URL一覧
             tiktok_urls,  # TikTok URL一覧
+            fuwatch_urls,  # ふわっちURL一覧
             kick_urls,  # Kick URL一覧
             abema_urls,  # AbemaTV URL一覧
             live17_urls,  # 17LIVE URL一覧
+            bigo_urls,  # BIGO LIVE URL一覧
             radiko_urls,  # radiko URL一覧
             openrectv_urls,  # OPENREC.tv URL一覧
             bilibili_urls,  # bilibili URL一覧
@@ -115,6 +123,10 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         raw_text = load_setting_value("tiktok_entries", DEFAULT_TIKTOK_ENTRIES, str)  # 設定文字列を取得
         entries = parse_auto_url_list(raw_text)  # 入力一覧を取得
         return normalize_platform_urls(entries, normalize_tiktok_entry)  # 正規化URL一覧を返却
+    def _get_auto_fuwatch_urls(self) -> list[str]:  # ふわっち監視URL一覧の取得
+        raw_text = load_setting_value("fuwatch_entries", DEFAULT_FUWATCH_ENTRIES, str)  # 設定文字列を取得
+        entries = parse_auto_url_list(raw_text)  # 入力一覧を取得
+        return normalize_platform_urls(entries, normalize_fuwatch_entry)  # 正規化URL一覧を返却
     def _get_auto_kick_urls(self) -> list[str]:  # Kick監視URL一覧の取得
         raw_text = load_setting_value("kick_entries", DEFAULT_KICK_ENTRIES, str)  # 設定文字列を取得
         entries = parse_auto_url_list(raw_text)  # 入力一覧を取得
@@ -127,6 +139,10 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         raw_text = load_setting_value("live17_entries", DEFAULT_LIVE17_ENTRIES, str)  # 設定文字列を取得
         entries = parse_auto_url_list(raw_text)  # 入力一覧を取得
         return normalize_platform_urls(entries, normalize_17live_entry)  # 正規化URL一覧を返却
+    def _get_auto_bigo_urls(self) -> list[str]:  # BIGO LIVE監視URL一覧の取得
+        raw_text = load_setting_value("bigo_entries", DEFAULT_BIGO_ENTRIES, str)  # 設定文字列を取得
+        entries = parse_auto_url_list(raw_text)  # 入力一覧を取得
+        return normalize_platform_urls(entries, normalize_bigo_entry)  # 正規化URL一覧を返却
     def _get_auto_radiko_urls(self) -> list[str]:  # radiko監視URL一覧の取得
         raw_text = load_setting_value("radiko_entries", DEFAULT_RADIKO_ENTRIES, str)  # 設定文字列を取得
         entries = parse_auto_url_list(raw_text)  # 入力一覧を取得
@@ -149,9 +165,11 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         twitcasting_urls = self._get_auto_twitcasting_urls()  # ツイキャスURL一覧を取得
         niconico_urls = self._get_auto_niconico_urls()  # ニコ生URL一覧を取得
         tiktok_urls = self._get_auto_tiktok_urls()  # TikTok URL一覧を取得
+        fuwatch_urls = self._get_auto_fuwatch_urls()  # ふわっちURL一覧を取得
         kick_urls = self._get_auto_kick_urls()  # Kick URL一覧を取得
         abema_urls = self._get_auto_abema_urls()  # AbemaTV URL一覧を取得
         live17_urls = self._get_auto_17live_urls()  # 17LIVE URL一覧を取得
+        bigo_urls = self._get_auto_bigo_urls()  # BIGO LIVE URL一覧を取得
         radiko_urls = self._get_auto_radiko_urls()  # radiko URL一覧を取得
         openrectv_urls = self._get_auto_openrectv_urls()  # OPENREC.tv URL一覧を取得
         bilibili_urls = self._get_auto_bilibili_urls()  # bilibili URL一覧を取得
@@ -185,9 +203,11 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
             twitcasting_urls,  # ツイキャスURL一覧
             niconico_urls,  # ニコ生URL一覧
             tiktok_urls,  # TikTok URL一覧
+            fuwatch_urls,  # ふわっちURL一覧
             kick_urls,  # Kick URL一覧
             abema_urls,  # AbemaTV URL一覧
             live17_urls,  # 17LIVE URL一覧
+            bigo_urls,  # BIGO LIVE URL一覧
             radiko_urls,  # radiko URL一覧
             openrectv_urls,  # OPENREC.tv URL一覧
             bilibili_urls,  # bilibili URL一覧
@@ -205,9 +225,11 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         twitcasting_urls = self._get_auto_twitcasting_urls()  # ツイキャスURL一覧を取得
         niconico_urls = self._get_auto_niconico_urls()  # ニコ生URL一覧を取得
         tiktok_urls = self._get_auto_tiktok_urls()  # TikTok URL一覧を取得
+        fuwatch_urls = self._get_auto_fuwatch_urls()  # ふわっちURL一覧を取得
         kick_urls = self._get_auto_kick_urls()  # Kick URL一覧を取得
         abema_urls = self._get_auto_abema_urls()  # AbemaTV URL一覧を取得
         live17_urls = self._get_auto_17live_urls()  # 17LIVE URL一覧を取得
+        bigo_urls = self._get_auto_bigo_urls()  # BIGO LIVE URL一覧を取得
         radiko_urls = self._get_auto_radiko_urls()  # radiko URL一覧を取得
         openrectv_urls = self._get_auto_openrectv_urls()  # OPENREC.tv URL一覧を取得
         bilibili_urls = self._get_auto_bilibili_urls()  # bilibili URL一覧を取得
@@ -217,9 +239,11 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
             twitcasting_urls,  # ツイキャスURL一覧
             niconico_urls,  # ニコ生URL一覧
             tiktok_urls,  # TikTok URL一覧
+            fuwatch_urls,  # ふわっちURL一覧
             kick_urls,  # Kick URL一覧
             abema_urls,  # AbemaTV URL一覧
             live17_urls,  # 17LIVE URL一覧
+            bigo_urls,  # BIGO LIVE URL一覧
             radiko_urls,  # radiko URL一覧
             openrectv_urls,  # OPENREC.tv URL一覧
             bilibili_urls,  # bilibili URL一覧
@@ -389,7 +413,9 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
             twitcasting_urls = self._get_auto_twitcasting_urls()  # ツイキャスURL一覧を取得
             niconico_urls = self._get_auto_niconico_urls()  # ニコ生URL一覧を取得
             tiktok_urls = self._get_auto_tiktok_urls()  # TikTok URL一覧を取得
+            fuwatch_urls = self._get_auto_fuwatch_urls()  # ふわっちURL一覧を取得
             kick_urls = self._get_auto_kick_urls()  # Kick URL一覧を取得
+            bigo_urls = self._get_auto_bigo_urls()  # BIGO LIVE URL一覧を取得
             radiko_urls = self._get_auto_radiko_urls()  # radiko URL一覧を取得
             openrectv_urls = self._get_auto_openrectv_urls()  # OPENREC.tv URL一覧を取得
             bilibili_urls = self._get_auto_bilibili_urls()  # bilibili URL一覧を取得
@@ -399,7 +425,9 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
                 twitcasting_urls,  # ツイキャスURL一覧
                 niconico_urls,  # ニコ生URL一覧
                 tiktok_urls,  # TikTok URL一覧
+                fuwatch_urls,  # ふわっちURL一覧
                 kick_urls,  # Kick URL一覧
+                bigo_urls,  # BIGO LIVE URL一覧
                 radiko_urls,  # radiko URL一覧
                 openrectv_urls,  # OPENREC.tv URL一覧
                 bilibili_urls,  # bilibili URL一覧

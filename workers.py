@@ -146,6 +146,15 @@ class AutoCheckWorker(QtCore.QObject):  # 自動監視ワーカー定義
                 for url in self.fallback_urls:  # URLごとにチェック
                     if self.stop_event.is_set():  # 停止要求の確認
                         break  # ループを中断
+                    if "whowatch.tv" in url and is_ytdlp_available():  # ふわっちはyt-dlp優先
+                        stream_url = fetch_stream_url_with_ytdlp(url, self.log_signal.emit)  # yt-dlpで確認
+                        if stream_url:  # URLが取れる場合
+                            if url not in live_urls:  # 重複確認
+                                live_urls.append(url)  # ライブURLとして追加
+                            self.log_signal.emit(f"自動監視: yt-dlpで配信検知 {url}")  # 検知ログ
+                        else:
+                            self.log_signal.emit(f"自動監視: yt-dlpで配信なし {url}")  # 配信なしログ
+                        continue  # Streamlinkには回さない
                     self.log_signal.emit(f"自動監視: チェック開始 {url}")  # 監視開始ログ
                     apply_streamlink_options_for_url(session, url)  # URL別のStreamlinkオプションを反映
                     original_headers = set_streamlink_headers_for_url(session, url)  # ヘッダー調整
@@ -167,6 +176,16 @@ class AutoCheckWorker(QtCore.QObject):  # 自動監視ワーカー定義
                             live_urls.append(url)  # ライブURLとして追加
                         self.log_signal.emit(f"自動監視: 配信検知 {url}")  # 配信検知ログ
                     else:  # ストリームが無い場合
+                        if (
+                            ("bigo.tv" in url or "bigo.live" in url or "whowatch.tv" in url)
+                            and is_ytdlp_available()
+                        ):  # yt-dlp優先対象
+                            stream_url = fetch_stream_url_with_ytdlp(url, self.log_signal.emit)  # yt-dlpで確認
+                            if stream_url:  # URLが取れる場合
+                                if url not in live_urls:  # 重複確認
+                                    live_urls.append(url)  # ライブURLとして追加
+                                self.log_signal.emit(f"自動監視: yt-dlpで配信検知 {url}")  # 検知ログ
+                                continue  # 次のURLへ
                         self.log_signal.emit(f"自動監視: 配信なし {url}")  # 配信なしログ
         except Exception as exc:  # 予期しない例外の捕捉
             self.log_signal.emit(f"自動監視: 予期しないエラー {exc}")  # 失敗ログ通知

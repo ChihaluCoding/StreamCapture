@@ -4,12 +4,13 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from string import Template
 from config import (
     DEFAULT_AUTO_CHECK_INTERVAL_SEC, DEFAULT_AUTO_ENABLED, DEFAULT_BILIBILI_ENTRIES,
-    DEFAULT_ABEMA_ENTRIES,
+    DEFAULT_ABEMA_ENTRIES, DEFAULT_BIGO_ENTRIES, DEFAULT_FUWATCH_ENTRIES,
     DEFAULT_LIVE17_ENTRIES,
     DEFAULT_KICK_ENTRIES, DEFAULT_NICONICO_ENTRIES, DEFAULT_OPENRECTV_ENTRIES,
     DEFAULT_OUTPUT_FORMAT, DEFAULT_RADIKO_ENTRIES, DEFAULT_RETRY_COUNT,
     DEFAULT_RETRY_WAIT_SEC, DEFAULT_TIKTOK_ENTRIES, DEFAULT_TWITCASTING_ENTRIES,
-    OUTPUT_FORMAT_MP4_COPY, OUTPUT_FORMAT_MP4_LIGHT, OUTPUT_FORMAT_TS,
+    OUTPUT_FORMAT_FLV, OUTPUT_FORMAT_MKV, OUTPUT_FORMAT_MOV, OUTPUT_FORMAT_MP3,
+    OUTPUT_FORMAT_MP4_COPY, OUTPUT_FORMAT_MP4_LIGHT, OUTPUT_FORMAT_TS, OUTPUT_FORMAT_WAV,
 )
 from settings_store import load_bool_setting, load_setting_value, save_setting_value
 
@@ -480,6 +481,17 @@ class SettingsDialog(QtWidgets.QDialog):
             QPushButton#PrimaryButton:pressed {
                 background-color: $c_primary_pressed;
             }
+
+            /* --- 折りたたみヘッダー --- */
+            QToolButton#CollapsibleHeader {
+                background: transparent;
+                border: none;
+                padding: 2px 0;
+            }
+            QToolButton#CollapsibleHeader:checked {
+                background: transparent;
+                border: none;
+            }
         """).substitute(colors))
 
     def _init_ui(self):
@@ -637,10 +649,24 @@ class SettingsDialog(QtWidgets.QDialog):
 
         # フォーマット
         self.output_format_input = QtWidgets.QComboBox()
-        self.output_format_input.addItems(["TS (無劣化・推奨)", "MP4 (高速コピー)", "MP4 (再エンコード・軽量)"])
+        self.output_format_input.addItems([
+            "TS (無劣化・推奨)",
+            "MP4 (高速コピー)",
+            "MP4 (再エンコード・軽量)",
+            "MOV (コピー)",
+            "FLV (コピー)",
+            "MKV (コピー)",
+            "MP3 (音声のみ)",
+            "WAV (音声のみ)",
+        ])
         self.output_format_input.setItemData(0, OUTPUT_FORMAT_TS)
         self.output_format_input.setItemData(1, OUTPUT_FORMAT_MP4_COPY)
         self.output_format_input.setItemData(2, OUTPUT_FORMAT_MP4_LIGHT)
+        self.output_format_input.setItemData(3, OUTPUT_FORMAT_MOV)
+        self.output_format_input.setItemData(4, OUTPUT_FORMAT_FLV)
+        self.output_format_input.setItemData(5, OUTPUT_FORMAT_MKV)
+        self.output_format_input.setItemData(6, OUTPUT_FORMAT_MP3)
+        self.output_format_input.setItemData(7, OUTPUT_FORMAT_WAV)
         self.output_format_input.setMinimumHeight(40)
         self._add_input_card(layout, "保存フォーマット", self.output_format_input, "用途に合わせてファイル形式を選択してください。")
 
@@ -649,6 +675,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self.preview_volume_input.setRange(0.0, 1.0)
         self.preview_volume_input.setSingleStep(0.1)
         self._add_card(layout, "プレビュー音量", self.preview_volume_input, "プレビュー再生時の初期音量 (0.0 ~ 1.0)")
+
+        self.keep_ts_input = ToggleSwitch()
+        self._add_card(layout, "TSファイルを残す", self.keep_ts_input, "MP4保存時でも元のTSファイルを残します。")
 
         layout.addStretch(1)
         return page
@@ -699,27 +728,51 @@ class SettingsDialog(QtWidgets.QDialog):
         desc.setObjectName("Description")
         layout.addWidget(desc)
 
-        def add_text_area(title, ph):
-            l = QtWidgets.QLabel(title)
-            l.setStyleSheet(f"font-weight: bold; color: {self._muted_label_color}; margin-top: 12px;")
-            t = QtWidgets.QPlainTextEdit()
-            t.setPlaceholderText(ph)
-            t.setMinimumHeight(100)
-            layout.addWidget(l)
-            layout.addWidget(t)
-            return t
+        def add_collapsible_text_area(title, ph):
+            container = QtWidgets.QWidget()
+            container_layout = QtWidgets.QVBoxLayout(container)
+            container_layout.setContentsMargins(0, 0, 0, 0)
+            container_layout.setSpacing(6)
 
-        self.youtube_channels_input = add_text_area("YouTube", "例: https://www.youtube.com/@channel")
-        self.twitch_channels_input = add_text_area("Twitch", "例: https://www.twitch.tv/shaka")
-        self.twitcasting_input = add_text_area("ツイキャス", "ID または URL")
-        self.niconico_input = add_text_area("ニコニコ生放送", "コミュニティID または URL")
-        self.tiktok_input = add_text_area("TikTok", "@handle または URL")
-        self.kick_input = add_text_area("Kick", "URL")
-        self.live17_input = add_text_area("17LIVE", "URL")
-        self.radiko_input = add_text_area("radiko", "URL")
-        self.openrectv_input = add_text_area("OPENREC.tv", "URL")
-        self.bilibili_input = add_text_area("bilibili", "URL")
-        self.abema_input = add_text_area("AbemaTV", "URL")
+            header = QtWidgets.QToolButton()
+            header.setObjectName("CollapsibleHeader")
+            header.setAutoRaise(True)
+            header.setCheckable(True)
+            header.setChecked(False)
+            header.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            header.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
+            header.setStyleSheet(f"font-weight: bold; color: {self._muted_label_color}; margin-top: 12px;")
+
+            text_area = QtWidgets.QPlainTextEdit()
+            text_area.setPlaceholderText(ph)
+            text_area.setMinimumHeight(100)
+
+            def _toggle(checked: bool) -> None:
+                prefix = "▼ " if checked else "▶ "
+                header.setText(prefix + title)
+                text_area.setVisible(checked)
+
+            header.toggled.connect(_toggle)
+            _toggle(False)
+
+            container_layout.addWidget(header)
+            container_layout.addWidget(text_area)
+            layout.addWidget(container)
+            return text_area
+
+        self.youtube_channels_input = add_collapsible_text_area("YouTube", "例: https://www.youtube.com/@channel")
+        self.twitch_channels_input = add_collapsible_text_area("Twitch", "例: https://www.twitch.tv/shaka")
+        self.twitcasting_input = add_collapsible_text_area("ツイキャス", "ID または URL")
+        self.niconico_input = add_collapsible_text_area("ニコニコ生放送", "コミュニティID または URL")
+        self.tiktok_input = add_collapsible_text_area("TikTok", "@handle または URL")
+        self.fuwatch_input = add_collapsible_text_area("ふわっち", "URL")
+        self.kick_input = add_collapsible_text_area("Kick", "URL")
+        self.live17_input = add_collapsible_text_area("17LIVE", "URL")
+        self.bigo_input = add_collapsible_text_area("BIGO LIVE", "URL または ID")
+        self.radiko_input = add_collapsible_text_area("radiko", "URL")
+        self.openrectv_input = add_collapsible_text_area("OPENREC.tv", "URL")
+        self.bilibili_input = add_collapsible_text_area("bilibili", "URL")
+        self.abema_input = add_collapsible_text_area("AbemaTV", "URL")
 
         layout.addStretch(1)
         return page
@@ -736,6 +789,9 @@ class SettingsDialog(QtWidgets.QDialog):
         lbl = QtWidgets.QLabel("ログ表示設定")
         lbl.setStyleSheet(f"font-weight: bold; margin-top: 16px; font-size: 15px; color: {self._section_label_color};")
         layout.addWidget(lbl)
+
+        self.log_panel_visible_input = ToggleSwitch()
+        self._add_card(layout, "ログパネル表示", self.log_panel_visible_input, "右側のログパネルを表示します。")
 
         self.log_show_monitor_input = ToggleSwitch()
         self._add_card(layout, "監視ログ", self.log_show_monitor_input)
@@ -790,6 +846,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.http_timeout_input.setValue(load_setting_value("http_timeout", 20, int))
         self.stream_timeout_input.setValue(load_setting_value("stream_timeout", 60, int))
         self.preview_volume_input.setValue(load_setting_value("preview_volume", 0.5, float))
+        self.keep_ts_input.setChecked(load_bool_setting("keep_ts_file", False))
         
         self.tray_enabled_input.setChecked(load_bool_setting("tray_enabled", False))
         self.auto_start_input.setChecked(load_bool_setting("auto_start_enabled", False))
@@ -804,12 +861,15 @@ class SettingsDialog(QtWidgets.QDialog):
         self.log_show_preview_input.setChecked(load_bool_setting("log_show_preview", True))
         self.log_show_youtube_input.setChecked(load_bool_setting("log_show_youtube", True))
         self.log_show_info_input.setChecked(load_bool_setting("log_show_info", True))
+        self.log_panel_visible_input.setChecked(load_bool_setting("log_panel_visible", False))
 
         self.twitcasting_input.setPlainText(load_setting_value("twitcasting_entries", DEFAULT_TWITCASTING_ENTRIES, str))
         self.niconico_input.setPlainText(load_setting_value("niconico_entries", DEFAULT_NICONICO_ENTRIES, str))
         self.tiktok_input.setPlainText(load_setting_value("tiktok_entries", DEFAULT_TIKTOK_ENTRIES, str))
+        self.fuwatch_input.setPlainText(load_setting_value("fuwatch_entries", DEFAULT_FUWATCH_ENTRIES, str))
         self.kick_input.setPlainText(load_setting_value("kick_entries", DEFAULT_KICK_ENTRIES, str))
         self.live17_input.setPlainText(load_setting_value("live17_entries", DEFAULT_LIVE17_ENTRIES, str))
+        self.bigo_input.setPlainText(load_setting_value("bigo_entries", DEFAULT_BIGO_ENTRIES, str))
         self.radiko_input.setPlainText(load_setting_value("radiko_entries", DEFAULT_RADIKO_ENTRIES, str))
         self.openrectv_input.setPlainText(load_setting_value("openrectv_entries", DEFAULT_OPENRECTV_ENTRIES, str))
         self.bilibili_input.setPlainText(load_setting_value("bilibili_entries", DEFAULT_BILIBILI_ENTRIES, str))
@@ -830,6 +890,7 @@ class SettingsDialog(QtWidgets.QDialog):
         save_setting_value("http_timeout", int(self.http_timeout_input.value()))
         save_setting_value("stream_timeout", int(self.stream_timeout_input.value()))
         save_setting_value("preview_volume", float(self.preview_volume_input.value()))
+        save_setting_value("keep_ts_file", int(self.keep_ts_input.isChecked()))
         
         save_setting_value("tray_enabled", int(self.tray_enabled_input.isChecked()))
         save_setting_value("auto_start_enabled", int(self.auto_start_input.isChecked()))
@@ -843,12 +904,15 @@ class SettingsDialog(QtWidgets.QDialog):
         save_setting_value("log_show_preview", int(self.log_show_preview_input.isChecked()))
         save_setting_value("log_show_youtube", int(self.log_show_youtube_input.isChecked()))
         save_setting_value("log_show_info", int(self.log_show_info_input.isChecked()))
+        save_setting_value("log_panel_visible", int(self.log_panel_visible_input.isChecked()))
         
         save_setting_value("twitcasting_entries", self.twitcasting_input.toPlainText().strip())
         save_setting_value("niconico_entries", self.niconico_input.toPlainText().strip())
         save_setting_value("tiktok_entries", self.tiktok_input.toPlainText().strip())
+        save_setting_value("fuwatch_entries", self.fuwatch_input.toPlainText().strip())
         save_setting_value("kick_entries", self.kick_input.toPlainText().strip())
         save_setting_value("live17_entries", self.live17_input.toPlainText().strip())
+        save_setting_value("bigo_entries", self.bigo_input.toPlainText().strip())
         save_setting_value("radiko_entries", self.radiko_input.toPlainText().strip())
         save_setting_value("openrectv_entries", self.openrectv_input.toPlainText().strip())
         save_setting_value("bilibili_entries", self.bilibili_input.toPlainText().strip())
