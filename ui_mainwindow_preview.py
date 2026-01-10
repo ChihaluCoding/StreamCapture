@@ -489,6 +489,7 @@ class MainWindowPreviewMixin:
             self._show_preview_unavailable(url, reason, select_tab)
             return
         is_whowatch = "whowatch.tv" in url
+        is_twitch = self._is_twitch_url(url)
         use_ffmpeg = self._should_use_ffmpeg_preview(url)
         use_ytdlp_preview = False
         process: QtCore.QProcess | None = None
@@ -499,7 +500,23 @@ class MainWindowPreviewMixin:
         stream_url = None
         preview_url = None
         start_delay_ms = 800
-        if is_whowatch and is_ytdlp_available():
+        if is_twitch and is_ytdlp_available():
+            ytdlp_url = fetch_stream_url_with_ytdlp(url, self._append_log)
+            if not ytdlp_url:
+                label = "Twitch" if is_twitch else "ふわっち"
+                self._append_log(f"{label}プレビュー用のURL取得に失敗しました。")
+                return
+            self._append_log(f"Twitchプレビュー準備: {ytdlp_url}")
+            use_ytdlp_preview = True
+            port = self._allocate_preview_udp_port()
+            preview_url = f"udp://@127.0.0.1:{port}"
+            output_url = f"udp://127.0.0.1:{port}?pkt_size=1316"
+            process = self._create_ffmpeg_preview_process_for_url(ytdlp_url, output_url)
+            if process is None:
+                return
+            use_ffmpeg = True
+            start_delay_ms = 1500
+        elif is_whowatch and is_ytdlp_available():
             ytdlp_url = fetch_stream_url_with_ytdlp(url, self._append_log)
             if not ytdlp_url:
                 self._append_log("ふわっちプレビュー用のURL取得に失敗しました。")
@@ -509,9 +526,9 @@ class MainWindowPreviewMixin:
             use_ytdlp_preview = True
             use_ffmpeg = False
         elif use_ffmpeg:
-            port = self._allocate_preview_tcp_port()
-            preview_url = f"tcp://127.0.0.1:{port}"
-            output_url = f"tcp://127.0.0.1:{port}?listen=1&listen_timeout=5"
+            port = self._allocate_preview_udp_port()
+            preview_url = f"udp://@127.0.0.1:{port}"
+            output_url = f"udp://127.0.0.1:{port}?pkt_size=1316"
             process = self._create_ffmpeg_preview_process(output_url)
             if process is None:
                 return
@@ -583,6 +600,7 @@ class MainWindowPreviewMixin:
                 session["use_ffmpeg"] = True
                 session["recording_path"] = None
                 session["seek_to_tail"] = False
+                self._bind_ffmpeg_process_retry(url, process)
             else:
                 player.setSource(QtCore.QUrl(stream_url))
                 session["process"] = None
@@ -649,6 +667,7 @@ class MainWindowPreviewMixin:
         }
         if use_ffmpeg and isinstance(process, QtCore.QProcess):
             self._start_player_with_source(player, preview_url, start_delay_ms)
+            self._bind_ffmpeg_process_retry(url, process)
         else:
             player.setSource(QtCore.QUrl(stream_url))
             player.play()
@@ -867,7 +886,7 @@ class MainWindowPreviewMixin:
         session = self.preview_sessions.get(url)
         if session is None:
             return
-        if session.get("use_ffmpeg"):
+        if session.get("use_ffmpeg") and not self._is_twitch_url(url):
             return
         existing_timer = session.get("stall_timer")
         if isinstance(existing_timer, QtCore.QTimer):
@@ -973,7 +992,7 @@ class MainWindowPreviewMixin:
         session = self.preview_sessions.get(url)
         if session is None:
             return
-        if session.get("use_ffmpeg"):
+        if session.get("use_ffmpeg") and not self._is_twitch_url(url):
             return
         if session.get("recording_path"):
             now = time.monotonic()
@@ -1091,6 +1110,16 @@ class MainWindowPreviewMixin:
         if not text:
             return
         self._append_log(f"プレビュー(FFmpeg): {text}")
+
+    def _bind_ffmpeg_process_retry(self, url: str, process: QtCore.QProcess) -> None:
+        if not isinstance(process, QtCore.QProcess):
+            return
+        process.errorOccurred.connect(
+            lambda _err, target_url=url: self._schedule_preview_retry(target_url, "ffmpegエラー")
+        )
+        process.finished.connect(
+            lambda _code, _status, target_url=url: self._schedule_preview_retry(target_url, "ffmpeg終了")
+        )
 
     def _stop_all_previews(self) -> None:
         for url in list(self.preview_sessions.keys()):
