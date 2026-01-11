@@ -29,6 +29,8 @@ class MainWindowTrayMixin:  # タスクトレイ/自動起動用ミックスイ�
             )  # 標準アイコン取得の終了
         self.tray_icon = QtWidgets.QSystemTrayIcon(icon, self)  # タスクトレイアイコン生成
         self.tray_menu = QtWidgets.QMenu(self)  # タスクトレイメニュー生成
+        self.tray_recording_actions: list[QtGui.QAction] = []  # 録画中一覧の表示枠
+        self.tray_recording_separator = self.tray_menu.addSeparator()  # 区切り線を追加
         show_action = QtGui.QAction("表示", self)  # 表示アクション作成
         show_action.triggered.connect(self._show_from_tray)  # 表示イベント接続
         exit_action = QtGui.QAction("終了", self)  # 終了アクション作成
@@ -38,7 +40,30 @@ class MainWindowTrayMixin:  # タスクトレイ/自動起動用ミックスイ�
         self.tray_menu.addAction(exit_action)  # 終了アクションを追加
         self.tray_icon.setContextMenu(self.tray_menu)  # トレイメニューを設定
         self.tray_icon.activated.connect(self._on_tray_activated)  # トレイクリックを接続
-        self.tray_icon.setToolTip("配信録画くん")  # ツールチップを設定
+        self.tray_icon.setToolTip("はいろく！")  # ツールチップを設定
+        self._update_tray_menu_recordings()
+
+    def _update_tray_menu_recordings(self) -> None:  # 録画中一覧を更新
+        menu = getattr(self, "tray_menu", None)
+        if not isinstance(menu, QtWidgets.QMenu):
+            return
+        separator = getattr(self, "tray_recording_separator", None)
+        if not isinstance(separator, QtGui.QAction):
+            return
+        for action in getattr(self, "tray_recording_actions", []):
+            menu.removeAction(action)
+        self.tray_recording_actions = []
+        items: list[str] = []
+        if hasattr(self, "_get_tray_recording_items"):
+            items = self._get_tray_recording_items()
+        if not items:
+            items = ["録画中: なし"]
+        insert_before = separator
+        for label in items:
+            action = QtGui.QAction(label, self)
+            action.setEnabled(False)
+            menu.insertAction(insert_before, action)
+            self.tray_recording_actions.append(action)
 
     def _apply_tray_setting(self, notify: bool) -> None:  # タスクトレイ設定を反映
         enabled = load_bool_setting("tray_enabled", False)  # タスクトレイ設定を取得
@@ -54,6 +79,8 @@ class MainWindowTrayMixin:  # タスクトレイ/自動起動用ミックスイ�
             self._setup_tray_icon()  # トレイアイコンを生成
         if isinstance(self.tray_icon, QtWidgets.QSystemTrayIcon):  # トレイアイコンがある場合
             self.tray_icon.show()  # トレイアイコンを表示
+            if hasattr(self, "_update_tray_tooltip"):
+                self._update_tray_tooltip()
 
     def _show_from_tray(self) -> None:  # トレイからウィンドウを表示
         self.showNormal()  # 通常表示に戻す
@@ -61,9 +88,7 @@ class MainWindowTrayMixin:  # タスクトレイ/自動起動用ミックスイ�
         self.raise_()  # 最前面に移動
 
     def _on_tray_activated(self, reason: QtWidgets.QSystemTrayIcon.ActivationReason) -> None:  # トレイクリック処理
-        if reason == QtWidgets.QSystemTrayIcon.ActivationReason.Trigger:  # 通常クリックの場合
-            self._show_from_tray()  # ウィンドウを表示
-        elif reason == QtWidgets.QSystemTrayIcon.ActivationReason.DoubleClick:  # ダブルクリックの場合
+        if reason == QtWidgets.QSystemTrayIcon.ActivationReason.DoubleClick:  # ダブルクリックの場合
             self._show_from_tray()  # ウィンドウを表示
 
     def _exit_app(self) -> None:  # アプリ終了処理
@@ -84,7 +109,10 @@ class MainWindowTrayMixin:  # タスクトレイ/自動起動用ミックスイ�
         self._apply_tray_setting(False)  # トレイ表示を反映
         self.hide()  # ウィンドウを非表示
         if isinstance(self.tray_icon, QtWidgets.QSystemTrayIcon):  # トレイアイコンがある場合
-            self.tray_icon.setToolTip("配信録画くん")  # ツールチップを更新
+            if hasattr(self, "_update_tray_tooltip"):
+                self._update_tray_tooltip()
+            else:
+                self.tray_icon.setToolTip("はいろく！")  # ツールチップを更新
 
     def _apply_startup_setting(self, notify: bool) -> None:  # 自動起動設定を反映
         enabled = load_bool_setting("auto_start_enabled", False)  # 自動起動設定を取得

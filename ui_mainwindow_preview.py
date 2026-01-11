@@ -17,6 +17,7 @@ from api_tiktok import fetch_tiktok_display_name
 from api_twitch import (
     fetch_twitch_display_name,
     fetch_twitch_live_urls,
+    fetch_twitch_display_name_oembed,
 )
 from api_twitcasting import fetch_twitcasting_display_name_by_scraping
 from api_youtube import (
@@ -237,7 +238,7 @@ class MainWindowPreviewMixin:
             client_id = load_setting_value("twitch_client_id", "", str).strip()
             client_secret = load_setting_value("twitch_client_secret", "", str).strip()
             if not client_id or not client_secret:
-                return None
+                return fetch_twitch_display_name_oembed(login, self._append_log)
             title = fetch_twitch_display_name(client_id, client_secret, login, self._append_log)
             return title if title else None
         if "twitcasting.tv" in host or "twitcasting" in url:
@@ -459,7 +460,6 @@ class MainWindowPreviewMixin:
         container_layout.addWidget(video)
         label = self._resolve_preview_tab_label(url)
         tab_index = self.preview_tabs.addTab(container, label)
-        container.setProperty("preview_url", url)
         self.preview_sessions[url] = {
             "player": player,
             "audio": audio,
@@ -662,7 +662,6 @@ class MainWindowPreviewMixin:
         container_layout.addWidget(video)
         label = self._resolve_preview_tab_label(url)
         tab_index = self.preview_tabs.addTab(container, label)
-        container.setProperty("preview_url", url)
         self.preview_sessions[url] = {
             "player": player,
             "audio": audio,
@@ -722,7 +721,7 @@ class MainWindowPreviewMixin:
             session = self.preview_sessions[url]
             label = session.get("message_label")
             if isinstance(label, QtWidgets.QLabel):
-                label.setText("この配信サイトのプレビューは表示できません。\nタイムシフトから確認してください。")
+                label.setText("この配信サイトのプレビューは表示できません。\nクリップ作成ツールから確認してください。")
             if select_tab:
                 self.preview_tabs.setCurrentWidget(session["widget"])
             self._set_preview_button_text("プレビュー停止")
@@ -732,7 +731,7 @@ class MainWindowPreviewMixin:
         layout = QtWidgets.QVBoxLayout(container)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.addStretch(1)
-        label = QtWidgets.QLabel("この配信サイトのプレビューは表示できません。\nタイムシフトから確認してください。")
+        label = QtWidgets.QLabel("この配信サイトのプレビューは表示できません。\nクリップ作成ツールから確認してください。")
         label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         label.setStyleSheet("font-size: 16px; color: #94a3b8;")
         layout.addWidget(label)
@@ -1175,7 +1174,7 @@ class MainWindowPreviewMixin:
             return [path for _, path in candidates]
         
         dialog = QtWidgets.QDialog(self)
-        dialog.setWindowTitle("タイムシフト再生の選択")
+        dialog.setWindowTitle("クリップ作成の選択")
         dialog.setModal(True)
         dialog.setMinimumSize(550, 400)
         
@@ -1316,7 +1315,7 @@ class MainWindowPreviewMixin:
     def _open_timeshift_window(self) -> None:
         candidates = self._collect_timeshift_candidates()
         if not candidates:
-            self._show_info("タイムシフト再生の対象が特定できません。録画中のURLを入力して再試行してください。")
+            self._show_info("クリップ作成の対象が特定できません。録画中のURLを入力して再試行してください。")
             return
         target_paths = self._select_timeshift_targets(candidates)
         if not target_paths:

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-  # 文字コード指定
 from __future__ import annotations  # 型ヒントの将来互換対応
 import os  # 環境変数
+from datetime import datetime  # 日付フォルダ
 import shutil  # 実行ファイル探索
 import subprocess  # 外部コマンド実行
 import threading  # 停止フラグ制御
@@ -53,11 +54,19 @@ def resolve_output_path(  # 出力パス決定
     elif url:  # URLが指定されている場合
         default_label = derive_channel_label(url)  # 配信者ラベルを生成
         output_dir = output_dir / default_label  # 配信者ごとのフォルダを作成
+    if load_bool_setting("output_date_folder_enabled", False):
+        date_folder = datetime.now().strftime("%Y-%m-%d")
+        output_dir = output_dir / date_folder
     output_dir.mkdir(parents=True, exist_ok=True)  # 出力先を確保
     if filename:  # ファイル名が指定された場合
         name = filename  # 指定名を使用
     else:  # 自動生成する場合
         name = build_default_recording_name()  # 既定の録画名を生成
+        if load_bool_setting("output_filename_with_channel", False):
+            label_source = channel_label or (derive_channel_label(url) if url else "")
+            safe_label = safe_filename_component(label_source)
+            if safe_label:
+                name = f"{safe_label}_{name}"
     if "." not in Path(name).name:  # 拡張子が無い場合
         name = f"{name}.ts"  # TS拡張子を補完
     candidate = output_dir / name  # 出力候補パスを生成

@@ -100,6 +100,68 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
             name = derive_platform_label_for_folder(url) or derive_channel_label(url)
         return f"{platform} / {name}" if name else platform
 
+    def _build_tray_tooltip(self) -> str:
+        base = "はいろく！"
+        lines: list[str] = []
+        manual_url = getattr(self, "manual_recording_url", None)
+        if isinstance(manual_url, str) and manual_url:
+            lines.append(f"手動: {self._format_recording_label(manual_url)}")
+        auto_sessions = getattr(self, "auto_sessions", {})
+        if isinstance(auto_sessions, dict) and auto_sessions:
+            max_lines = 4 if lines else 5
+            for index, url in enumerate(auto_sessions.keys()):
+                if index >= max_lines:
+                    break
+                lines.append(f"自動: {self._format_recording_label(url)}")
+            remaining = len(auto_sessions) - max_lines
+            if remaining > 0:
+                lines.append(f"他 {remaining}件")
+        if not lines:
+            return base
+        return base + "\n" + "\n".join(lines)
+
+    def _build_tray_message(self) -> str:
+        lines: list[str] = []
+        manual_url = getattr(self, "manual_recording_url", None)
+        if isinstance(manual_url, str) and manual_url:
+            lines.append(self._format_recording_label(manual_url))
+        auto_sessions = getattr(self, "auto_sessions", {})
+        if isinstance(auto_sessions, dict) and auto_sessions:
+            max_lines = 3 if lines else 4
+            for index, url in enumerate(auto_sessions.keys()):
+                if index >= max_lines:
+                    break
+                lines.append(self._format_recording_label(url))
+            remaining = len(auto_sessions) - max_lines
+            if remaining > 0:
+                lines.append(f"他 {remaining}件")
+        return "\n".join(lines)
+
+    def _get_tray_recording_items(self) -> list[str]:
+        items: list[str] = []
+        manual_url = getattr(self, "manual_recording_url", None)
+        if isinstance(manual_url, str) and manual_url:
+            items.append(self._format_recording_label(manual_url))
+        auto_sessions = getattr(self, "auto_sessions", {})
+        if isinstance(auto_sessions, dict) and auto_sessions:
+            max_items = 5 if items else 6
+            for index, url in enumerate(auto_sessions.keys()):
+                if index >= max_items:
+                    break
+                items.append(self._format_recording_label(url))
+            remaining = len(auto_sessions) - max_items
+            if remaining > 0:
+                items.append(f"他 {remaining}件")
+        return items
+
+    def _update_tray_tooltip(self) -> None:
+        tray_icon = getattr(self, "tray_icon", None)
+        if not isinstance(tray_icon, QtWidgets.QSystemTrayIcon):
+            return
+        tray_icon.setToolTip(self._build_tray_tooltip())
+        if hasattr(self, "_update_tray_menu_recordings"):
+            self._update_tray_menu_recordings()
+
     def _ensure_recording_duration_timer(self) -> QtCore.QTimer:
         timer = getattr(self, "recording_duration_timer", None)
         if isinstance(timer, QtCore.QTimer):
@@ -162,6 +224,43 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
             return
         timer.stop()
         self._update_recording_duration_label()
+
+    def _on_conversion_started(self, url: str) -> None:
+        if not url:
+            return
+        popups = getattr(self, "_conversion_popups", None)
+        if not isinstance(popups, dict):
+            popups = {}
+            self._conversion_popups = popups
+        if url in popups:
+            return
+        dialog = QtWidgets.QProgressDialog("動画を変換中です...", "", 0, 0, self)
+        dialog.setWindowTitle("変換中")
+        dialog.setWindowModality(QtCore.Qt.WindowModality.NonModal)
+        dialog.setCancelButton(None)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.setMinimumDuration(0)
+        layout = dialog.layout()
+        if layout is not None:
+            layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        label = dialog.findChild(QtWidgets.QLabel)
+        if isinstance(label, QtWidgets.QLabel):
+            label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        bar = dialog.findChild(QtWidgets.QProgressBar)
+        if isinstance(bar, QtWidgets.QProgressBar):
+            bar.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        dialog.show()
+        popups[url] = dialog
+
+    def _close_conversion_popup(self, url: str) -> None:
+        popups = getattr(self, "_conversion_popups", None)
+        if not isinstance(popups, dict):
+            return
+        dialog = popups.pop(url, None)
+        if isinstance(dialog, QtWidgets.QProgressDialog):
+            dialog.close()
+            dialog.deleteLater()
     def _configure_auto_monitor(self) -> None:  # 自動監視の設定
         enabled = load_bool_setting("auto_enabled", DEFAULT_AUTO_ENABLED)  # 有効設定を取得
         interval = load_setting_value("auto_check_interval", DEFAULT_AUTO_CHECK_INTERVAL_SEC, int)  # 間隔設定を取得
@@ -389,20 +488,27 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         self.auto_check_worker.finished_signal.connect(self._on_auto_check_finished)  # 完了イベント接続
         self.auto_check_thread.start()  # 監視スレッド開始
     def _on_auto_check_finished(self, live_urls: list[str]) -> None:  # 自動監視完了処理
+        manual_requested = bool(getattr(self, "_manual_auto_record_requested", False))
         if self.auto_paused_by_user:  # 手動停止中の場合
             self._append_log("自動監視: 手動停止中のため録画開始をスキップしました。")  # スキップログ
             self._cleanup_auto_check_thread()  # 自動監視スレッドを後始末
             self.auto_check_in_progress = False  # 監視中フラグを解除
+            if manual_requested:
+                self._manual_auto_record_requested = False
             return  # 録画開始はしない
-        if not load_bool_setting("auto_enabled", DEFAULT_AUTO_ENABLED):  # 自動録画が無効の場合
+        if not manual_requested and not load_bool_setting("auto_enabled", DEFAULT_AUTO_ENABLED):  # 自動録画が無効の場合
             self._append_log("自動監視: 無効設定のため録画開始をスキップしました。")  # スキップログ
             self._cleanup_auto_check_thread()  # 自動監視スレッドを後始末
             self.auto_check_in_progress = False  # 監視中フラグを解除
             return  # 録画開始はしない
+        if manual_requested and not live_urls:
+            self._show_info("監視対象の配信が見つかりませんでした。")
         for url in live_urls:  # ライブURLごとに処理
             self._start_auto_recording(url)  # 自動録画を開始
         self._cleanup_auto_check_thread()  # 監視スレッドを後始末
         self.auto_check_in_progress = False  # 監視中フラグを解除
+        if manual_requested:
+            self._manual_auto_record_requested = False
     def _cleanup_auto_check_thread(self) -> None:  # 自動監視スレッドの後始末
         if self.auto_check_worker is not None:  # ワーカーが存在する場合
             self.auto_check_worker.deleteLater()  # ワーカーを破棄
@@ -452,6 +558,7 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         worker.moveToThread(thread)  # ワーカーをスレッドへ移動
         thread.started.connect(worker.run)  # 開始イベント接続
         worker.log_signal.connect(self._append_log)  # ログ接続
+        worker.conversion_started.connect(self._on_conversion_started)
         worker.finished_signal.connect(  # 終了イベント接続
             lambda exit_code, record_url=normalized_url: self._on_auto_recording_finished(record_url, exit_code)  # 終了処理
         )  # イベント接続の終了
@@ -470,7 +577,7 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         self._update_recording_duration_label()
         channel_label = self._resolve_channel_folder_label(normalized_url)  # 配信者名を取得
         self._show_tray_notification(  # 自動録画開始を通知
-            "配信録画くん",  # 通知タイトル
+            "はいろく！",  # 通知タイトル
             f"{channel_label}さんの配信の録画を開始します。",  # 通知本文
         )  # 通知表示の終了
         if self._is_twitch_url(normalized_url):  # Twitchの場合
@@ -484,6 +591,7 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
                 reason="自動録画",  # 理由指定
                 select_tab=False,  # タブを強制選択しない
             )  # プレビュー開始の終了
+        self._update_tray_tooltip()
         if not self.stop_button.isEnabled():  # 停止ボタンが無効の場合
             self.stop_button.setEnabled(True)  # 停止ボタンを有効化
         self._update_timeshift_button_state()  # タイムシフトボタン状態を更新
@@ -499,11 +607,13 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
             if worker is not None:  # ワーカーが存在する場合
                 worker.deleteLater()  # ワーカーを破棄
         self._append_log(f"自動録画終了: {url}（終了コード: {exit_code}）")  # ログ出力
+        self._close_conversion_popup(url)
         self._stop_preview_for_url(url, remove_tab=True)  # 自動録画のプレビューを停止
         if not self.auto_sessions and self.stop_event is None:  # 録画が無い場合
             self.stop_button.setEnabled(False)  # 停止ボタンを無効化
         self._update_timeshift_button_state()  # タイムシフトボタン状態を更新
         self._stop_recording_duration_timer_if_idle()
+        self._update_tray_tooltip()
     def _stop_all_auto_recordings(self) -> None:  # 自動録画の一括停止
         for url, session in list(self.auto_sessions.items()):  # セッションを列挙
             stop_event = session.get("stop_event")  # 停止フラグを取得
@@ -517,12 +627,10 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         self.auto_sessions.clear()  # セッション一覧をクリア
         self._update_timeshift_button_state()  # タイムシフトボタン状態を更新
         self._stop_recording_duration_timer_if_idle()
+        self._update_tray_tooltip()
     def _start_recording(self) -> None:  # 録画開始処理
         url = self.url_input.text().strip()  # URL取得
         if not url:  # URLが空の場合
-            if not load_bool_setting("auto_enabled", DEFAULT_AUTO_ENABLED):  # 自動録画が無効の場合
-                self._show_info("配信URLを入力してください。")  # 通知表示
-                return  # 処理中断
             twitcasting_urls = self._get_auto_twitcasting_urls()  # ツイキャスURL一覧を取得
             niconico_urls = self._get_auto_niconico_urls()  # ニコ生URL一覧を取得
             tiktok_urls = self._get_auto_tiktok_urls()  # TikTok URL一覧を取得
@@ -550,14 +658,14 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
                 return  # 処理中断
             if self.auto_check_in_progress:  # 既に監視中の場合
                 self._append_log("自動監視が実行中のため開始要求をスキップしました。")  # ログ出力
+                self._manual_auto_record_requested = True
                 return  # 処理中断
             if self.auto_paused_by_user:  # 手動停止状態の場合
                 self.auto_paused_by_user = False  # 手動停止状態を解除
                 self._refresh_auto_resume_button_state()  # 自動録画再開ボタン状態を更新
-            self.auto_monitor_forced = True  # 手動開始で自動監視を有効化
-            self._configure_auto_monitor()  # 自動監視を再設定
-            self._append_log("録画開始により自動録画を開始します。")  # 開始ログを出力
-            self._trigger_auto_check_now()  # すぐに監視を実行
+            self._manual_auto_record_requested = True
+            self._append_log("録画開始: 監視対象の配信を確認します。")  # 開始ログを出力
+            self._start_auto_check(merged_urls)  # すぐに監視を実行
             return  # 処理中断
         self.manual_recording_url = url  # 手動録画URLを記録
         self.manual_recording_started_at = time.monotonic()
@@ -594,11 +702,13 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         self.worker.moveToThread(self.worker_thread)  # スレッドへ移動
         self.worker_thread.started.connect(self.worker.run)  # 開始イベント接続
         self.worker.log_signal.connect(self._append_log)  # ログ接続
+        self.worker.conversion_started.connect(self._on_conversion_started)
         self.worker.finished_signal.connect(self._on_recording_finished)  # 終了イベント接続
         self.worker_thread.start()  # スレッド開始
         self.start_button.setEnabled(False)  # 開始ボタン無効化
         self.stop_button.setEnabled(True)  # 停止ボタン有効化
         self._update_timeshift_button_state()  # タイムシフトボタン状態を更新
+        self._update_tray_tooltip()
         timer = self._ensure_recording_duration_timer()
         if not timer.isActive():
             timer.start()
@@ -658,6 +768,7 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         self._pause_auto_recording_by_user()  # 自動録画を手動停止状態にする
         self._append_log("停止要求を送信しました。")  # ログ出力
         self.stop_button.setEnabled(False)  # 停止ボタン無効化
+        self._update_tray_tooltip()
     def _has_active_recording_tasks(self) -> bool:  # 録画/変換が動作中か判定
         if isinstance(self.worker_thread, QtCore.QThread) and self.worker_thread.isRunning():  # 手動録画が動作中の場合
             return True  # 動作中として返却
@@ -669,6 +780,7 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
     def _on_recording_finished(self, exit_code: int) -> None:  # 録画終了処理
         self._append_log(f"録画終了（終了コード: {exit_code}）")  # ログ出力
         if self.manual_recording_url:  # 手動録画URLがある場合
+            self._close_conversion_popup(self.manual_recording_url)
             self._stop_preview_for_url(self.manual_recording_url, remove_tab=True)  # 手動録画のプレビューを停止
         self.manual_recording_url = None  # 手動録画URLをクリア
         self.manual_recording_path = None  # 手動録画パスをクリア
@@ -683,13 +795,14 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         self.stop_button.setEnabled(False)  # 停止ボタン無効化
         self._update_timeshift_button_state()  # タイムシフトボタン状態を更新
         self._stop_recording_duration_timer_if_idle()
+        self._update_tray_tooltip()
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # 終了時処理
         if not self._allow_quit and load_bool_setting("tray_enabled", False):  # トレイ常駐時の処理
             if QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():  # トレイが使える場合
                 self._apply_tray_setting(False)  # トレイ表示を反映
                 self.hide()  # ウィンドウを非表示
                 if isinstance(self.tray_icon, QtWidgets.QSystemTrayIcon):  # トレイアイコンがある場合
-                    self.tray_icon.setToolTip("配信録画くん")  # 通知の代わりにツールチップだけ更新
+                    self._update_tray_tooltip()
                 event.ignore()  # 終了を中断
                 return  # 以降の終了処理を行わない
         if not self._force_quit and self._has_active_recording_tasks():  # 録画/変換が動作中の場合

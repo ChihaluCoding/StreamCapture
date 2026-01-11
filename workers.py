@@ -8,16 +8,24 @@ from streamlink.exceptions import StreamlinkError  # Streamlink例外
 from api_twitch import fetch_twitch_live_urls  # Twitch API処理
 from api_youtube import fetch_youtube_live_urls_with_fallback  # YouTube API処理
 from platform_utils import normalize_twitch_login  # Twitch入力の正規化
-from recording import convert_recording, record_stream  # 録画処理を読み込み
+from recording import (
+    OUTPUT_FORMAT_TS,
+    convert_recording,
+    normalize_output_format,
+    record_stream,
+)  # 録画処理を読み込み
 from streamlink_utils import (  # Streamlinkヘッダー調整
     apply_streamlink_options_for_url,  # URL別オプション調整
     restore_streamlink_headers,  # ヘッダー復元
     set_streamlink_headers_for_url,  # URL別ヘッダー設定
 )
 from ytdlp_utils import fetch_stream_url_with_ytdlp, is_ytdlp_available  # yt-dlp補助
+from settings_store import load_bool_setting, load_setting_value  # 設定入出力
+from google_drive_utils import upload_to_drive  # Google Driveアップロード
 
 class RecorderWorker(QtCore.QObject):  # 録画ワーカー定義
     log_signal = QtCore.pyqtSignal(str)  # ログ通知シグナル
+    conversion_started = QtCore.pyqtSignal(str)  # 変換開始通知シグナル
     finished_signal = QtCore.pyqtSignal(int)  # 終了通知シグナル
     def __init__(  # 初期化処理
         self,  # 自身参照
@@ -64,11 +72,26 @@ class RecorderWorker(QtCore.QObject):  # 録画ワーカー定義
         except Exception as exc:  # 予期しない例外を捕捉
             status_cb(f"致命的なエラーが発生しました: {exc}")  # エラーメッセージ通知
             exit_code = 1  # 異常終了コードを設定
-        convert_recording(  # 出力形式に合わせた変換
+        normalized_format = normalize_output_format(self.output_format)
+        if normalized_format != OUTPUT_FORMAT_TS:
+            self.conversion_started.emit(self.url)
+        converted_path = convert_recording(  # 出力形式に合わせた変換
             self.output_path,  # 入力パス指定
-            self.output_format,  # 出力形式指定
+            normalized_format,  # 出力形式指定
             status_cb=status_cb,  # 状態通知コールバック指定
         )  # 変換の終了
+        if converted_path and load_bool_setting("gdrive_enabled", False):
+            credentials_path = load_setting_value("gdrive_credentials_path", "", str)
+            folder_id = load_setting_value("gdrive_folder_id", "", str)
+            try:
+                upload_to_drive(
+                    converted_path,
+                    credentials_path,
+                    folder_id,
+                    status_cb=status_cb,
+                )
+            except Exception as exc:
+                status_cb(f"Google Drive: アップロードに失敗しました: {exc}")
         self.finished_signal.emit(exit_code)  # 終了シグナル送信
 
 class AutoCheckWorker(QtCore.QObject):  # 自動監視ワーカー定義

@@ -60,6 +60,26 @@ def fetch_twitch_display_name(  # Twitch表示名取得
     log_cb(f"Twitch表示名の取得に失敗しました: {login}")  # 失敗ログ
     return None  # 失敗時はNone
 
+def fetch_twitch_display_name_oembed(  # Twitch表示名取得(oEmbed)
+    login: str,  # ログイン名
+    log_cb: Callable[[str], None],  # ログコールバック
+) -> Optional[str]:  # 表示名を返却
+    if not login:
+        return None
+    url = f"https://api.twitch.tv/oembed?url=https://www.twitch.tv/{login}"
+    data = request_json(
+        url=url,
+        params=None,
+        headers=None,
+        timeout_sec=15,
+        log_cb=log_cb,
+    )
+    if data and isinstance(data, dict):
+        author = data.get("author_name")
+        if isinstance(author, str) and author.strip():
+            return author.strip()
+    return None
+
 def fetch_twitch_live_urls(  # TwitchライブURL取得
     client_id: str,  # クライアントID
     client_secret: str,  # クライアントシークレット

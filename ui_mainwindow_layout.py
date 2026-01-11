@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-from pathlib import Path
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 class MainWindowLayoutMixin:
@@ -29,24 +28,7 @@ class MainWindowLayoutMixin:
         sidebar_layout.setContentsMargins(24, 32, 24, 32)
         sidebar_layout.setSpacing(24)
 
-        # --- タイトルロゴ ---
-        logo_label = QtWidgets.QLabel()
-        logo_label.setObjectName("SidebarTitle")
-        logo_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
-        logo_label.setContentsMargins(-8, 0, 0, 0)
-        logo_path = Path(__file__).resolve().parent / "logo.png"
-        pixmap = QtGui.QPixmap(str(logo_path))
-        if not pixmap.isNull():
-            max_width = 280
-            scaled = pixmap.scaledToWidth(
-                max_width,
-                QtCore.Qt.TransformationMode.SmoothTransformation,
-            )
-            logo_label.setPixmap(scaled)
-            logo_label.setFixedHeight(scaled.height())
-        else:
-            logo_label.setText("配信録画くん")
-        sidebar_layout.addWidget(logo_label)
+        # --- タイトル（非表示） ---
 
         # --- URL入力エリア ---
         url_group = QtWidgets.QWidget()
@@ -112,12 +94,17 @@ class MainWindowLayoutMixin:
         self.auto_resume_button.clicked.connect(self._resume_auto_recording)
         sub_layout.addWidget(self.auto_resume_button)
 
-        self.timeshift_button = QtWidgets.QPushButton("タイムシフト再生")
+        self.timeshift_button = QtWidgets.QPushButton("クリップ作成")
         self.timeshift_button.setObjectName("StatusButton")
         self.timeshift_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.timeshift_button.setEnabled(False)
         self.timeshift_button.clicked.connect(self._open_timeshift_window)
         sub_layout.addWidget(self.timeshift_button)
+
+        version_label = QtWidgets.QLabel("v1.0.0 beta")
+        version_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+        version_label.setStyleSheet("font-weight: normal; color: #94a3b8;")
+        sub_layout.addWidget(version_label)
 
         sidebar_layout.addLayout(sub_layout)
 
@@ -243,8 +230,8 @@ class MainWindowLayoutMixin:
             c_tab_hover_bg = "#e2e8f0"
             c_input_bg = "#f8fafc"
             c_input_focus_bg = "#ffffff"
-            c_log_bg = "#0f172a"
-            c_log_text = "#e2e8f0"
+            c_log_bg = "#ffffff"
+            c_log_text = "#1e293b"
 
         font_main = '"Noto Sans JP", "Meiryo UI", "Meiryo", "Segoe UI", sans-serif'  # 日本語表示に最適化したフォント
         font_mono = '"Consolas", "Monaco", monospace'  # 等幅フォントは既存を維持

@@ -26,8 +26,8 @@ class MainWindow(  # メインウィンドウ定義
 ):  # クラス定義終了
     def __init__(self) -> None:  # 初期化処理
         super().__init__()  # 親クラス初期化
-        self.setWindowIcon(QtGui.QIcon(str(Path(__file__).resolve().with_name("icon.ico"))))  # ウィンドウアイコン設定
-        self.setWindowTitle("配信録画くん")  # ウィンドウタイトル設定
+        self.setWindowIcon(QtGui.QIcon(str(Path(__file__).resolve().with_name("icon.png"))))  # ウィンドウアイコン設定
+        self.setWindowTitle("はいろく！")  # ウィンドウタイトル設定
         self.setMinimumSize(900, 680)  # 最小サイズ設定
         self._allow_quit = False  # 終了許可フラグ
         self._force_quit = False  # 強制終了フラグ
@@ -39,7 +39,7 @@ class MainWindow(  # メインウィンドウ定義
         self.manual_recording_url: str | None = None  # 手動録画URL参照
         self.manual_recording_path: Path | None = None  # 手動録画パス参照
         self.auto_sessions: dict[str, dict] = {}  # 自動録画セッション管理
-        self.timeshift_windows: list[TimeShiftWindow] = []  # タイムシフト再生ウィンドウ管理
+        self.timeshift_windows: list[TimeShiftWindow] = []  # クリップ作成ツールウィンドウ管理
         self.auto_timer = QtCore.QTimer(self)  # 自動監視タイマー
         self.auto_timer.setTimerType(QtCore.Qt.TimerType.CoarseTimer)  # タイマー種別設定
         self.auto_timer.timeout.connect(self._on_auto_timer)  # タイマーイベント接続

@@ -51,8 +51,8 @@ def main() -> int:  # エントリポイント
     )  # ログ抑制設定の終了
     _install_stderr_filter()  # stderrの警告を抑制
     app = QtWidgets.QApplication(sys.argv)  # アプリケーション生成
-    app.setApplicationName("配信録画くん")  # アプリ名設定
-    app.setWindowIcon(QtGui.QIcon(str(Path(__file__).resolve().with_name("icon.ico"))))  # アプリ全体のアイコン
+    app.setApplicationName("はいろく！")  # アプリ名設定
+    app.setWindowIcon(QtGui.QIcon(str(Path(__file__).resolve().with_name("icon.png"))))  # アプリ全体のアイコン
     app.setQuitOnLastWindowClosed(False)  # タスクトレイ常駐に備えて終了を抑制
     window = MainWindow()  # メインウィンドウ生成
     window.show()  # ウィンドウ表示

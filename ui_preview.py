@@ -2,7 +2,9 @@
 from __future__ import annotations
 import datetime as dt
 import subprocess
+import tempfile
 import threading
+import hashlib
 from pathlib import Path
 from typing import Optional
 from PyQt6 import QtCore, QtGui, QtMultimedia, QtMultimediaWidgets, QtWidgets
@@ -10,6 +12,9 @@ from streamlink import Streamlink
 from streamlink.exceptions import StreamlinkError
 from config import (
     DEFAULT_QUALITY,
+    DEFAULT_TIMESHIFT_SEGMENT_HOURS,
+    DEFAULT_TIMESHIFT_SEGMENT_MINUTES,
+    DEFAULT_TIMESHIFT_SEGMENT_SECONDS,
     OUTPUT_FORMAT_FLV,
     OUTPUT_FORMAT_MKV,
     OUTPUT_FORMAT_MOV,
@@ -98,12 +103,42 @@ class TimeShiftWindow(QtWidgets.QDialog):
         super().__init__(parent)
         self._recording_path = Path(recording_path)
         self._playback_path: Path | None = None
+        self._temp_mp4_path: Path | None = None
+        self._use_temp_mp4 = False
+        self._temp_mp4_offset_ms = 0
+        self._temp_mp4_range: tuple[int, int] | None = None
+        self._temp_mp4_is_copy = False
+        self._temp_mp4_retry = False
+        self._was_playing_before_seek = False
+        self._proxy_process: QtCore.QProcess | None = None
+        self._proxy_target_range: tuple[int, int] | None = None
+        self._proxy_mp4_path: Path | None = None
+        self._temp_files: set[Path] = set()
         self._dragging_slider = False
         self._clips: list[tuple[int, int]] = []
         self._segment_ranges: list[tuple[int, int]] = []
         self._segment_playback: tuple[int, int] | None = None
         self._last_duration_ms = 0
-        self.setWindowTitle("タイムシフト再生")
+        self._recording_duration_ms = 0
+        self._mp4_converted_segments: set[tuple[int, int]] = set()
+        self._mp4_converted_all = False
+        self._segment_hours = load_setting_value(
+            "timeshift_segment_hours",
+            DEFAULT_TIMESHIFT_SEGMENT_HOURS,
+            int,
+        )
+        self._segment_minutes = load_setting_value(
+            "timeshift_segment_minutes",
+            DEFAULT_TIMESHIFT_SEGMENT_MINUTES,
+            int,
+        )
+        self._segment_seconds = load_setting_value(
+            "timeshift_segment_seconds",
+            DEFAULT_TIMESHIFT_SEGMENT_SECONDS,
+            int,
+        )
+        self._segment_duration_ms = self._resolve_segment_duration_ms()
+        self.setWindowTitle("クリップ作成ツール")
         self.setMinimumSize(800, 500)
         self._apply_theme()
         self._build_ui()
@@ -317,7 +352,7 @@ class TimeShiftWindow(QtWidgets.QDialog):
         self._reload_button = QtWidgets.QPushButton("最新に更新")
         self._reload_button.setObjectName("PrimaryButton")
         self._reload_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        
+
         self._position_label = QtWidgets.QLabel("00:00 / 00:00")
         self._position_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
         
@@ -336,27 +371,24 @@ class TimeShiftWindow(QtWidgets.QDialog):
         clip_layout.setContentsMargins(20, 12, 20, 12)
         clip_layout.setSpacing(10)
 
-        segment_title = QtWidgets.QLabel("10秒ごとの分割（テスト）")
+        segment_title = QtWidgets.QLabel(self._segment_label_text())
         segment_title.setObjectName("SectionTitle")
         clip_layout.addWidget(segment_title)
 
         segment_row = QtWidgets.QHBoxLayout()
         segment_row.setSpacing(10)
         self._segment_list = QtWidgets.QListWidget()
+        self._segment_list.setMinimumHeight(180)
         self._segment_list.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
         self._segment_list.itemSelectionChanged.connect(self._apply_selected_segment)
-        self._segment_apply_btn = QtWidgets.QPushButton("入力に反映")
-        self._segment_apply_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self._segment_apply_btn.setObjectName("GhostButton")
-        self._segment_apply_btn.clicked.connect(self._apply_selected_segment)
-        self._segment_export_btn = QtWidgets.QPushButton("一時保存")
-        self._segment_export_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self._segment_export_btn.setObjectName("PrimaryButton")
-        self._segment_export_btn.clicked.connect(self._export_selected_segments)
+        self._segment_mp4_btn = QtWidgets.QPushButton("選択をMP4変換")
+        self._segment_mp4_btn.setToolTip("選択した区間を一時MP4に変換して再生します。")
+        self._segment_mp4_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._segment_mp4_btn.setObjectName("GhostButton")
+        self._segment_mp4_btn.clicked.connect(self._convert_to_temp_mp4)
         segment_btns = QtWidgets.QVBoxLayout()
         segment_btns.setSpacing(8)
-        segment_btns.addWidget(self._segment_apply_btn)
-        segment_btns.addWidget(self._segment_export_btn)
+        segment_btns.addWidget(self._segment_mp4_btn)
         segment_btns.addStretch(1)
         segment_row.addWidget(self._segment_list, 1)
         segment_row.addLayout(segment_btns)
@@ -365,6 +397,11 @@ class TimeShiftWindow(QtWidgets.QDialog):
         clip_title = QtWidgets.QLabel("クリップ作成")
         clip_title.setObjectName("SectionTitle")
         clip_layout.addWidget(clip_title)
+
+        version_label = QtWidgets.QLabel("v1.0.0 beta")
+        version_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+        version_label.setStyleSheet("font-weight: normal;")
+        clip_layout.addWidget(version_label)
 
         clip_row = QtWidgets.QHBoxLayout()
         clip_row.setSpacing(10)
@@ -483,10 +520,11 @@ class TimeShiftWindow(QtWidgets.QDialog):
         if not self._recording_path.exists():
             QtWidgets.QMessageBox.information(self, "情報", "録画ファイルが見つかりません。")
             return
-        if self._recording_path.stat().st_size < 188 * 10:
+        if self._recording_path.stat().st_size <= 0:
             QtWidgets.QMessageBox.information(self, "情報", "録画ファイルがまだ作成中です。")
             return
         playback_path = self._prepare_timeshift_source(self._recording_path, force=True)
+        self._playback_path = playback_path
         file_url = QtCore.QUrl.fromLocalFile(str(playback_path))
         self._player.setSource(file_url)
         self._player.play()
@@ -504,6 +542,7 @@ class TimeShiftWindow(QtWidgets.QDialog):
             return
         current_pos = int(self._player.position())
         playback_path = self._prepare_timeshift_source(self._recording_path, force=True)
+        self._playback_path = playback_path
         file_url = QtCore.QUrl.fromLocalFile(str(playback_path))
         self._player.setSource(file_url)
         self._player.play()
@@ -514,19 +553,33 @@ class TimeShiftWindow(QtWidgets.QDialog):
 
     def _on_slider_pressed(self) -> None:
         self._dragging_slider = True
+        self._was_playing_before_seek = (
+            self._player.playbackState() == QtMultimedia.QMediaPlayer.PlaybackState.PlayingState
+        )
 
     def _on_slider_released(self) -> None:
         self._dragging_slider = False
         self._player.setPosition(int(self._position_slider.value()))
+        if self._was_playing_before_seek and (
+            self._player.playbackState() != QtMultimedia.QMediaPlayer.PlaybackState.PlayingState
+        ):
+            self._player.play()
 
     def _on_slider_moved(self, value: int) -> None:
-        self._position_label.setText(self._format_position(int(value), int(self._player.duration())))
+        position = int(value)
+        self._position_label.setText(self._format_position(position, int(self._player.duration())))
+        if self._dragging_slider:
+            self._player.setPosition(position)
+            if self._was_playing_before_seek and (
+                self._player.playbackState() != QtMultimedia.QMediaPlayer.PlaybackState.PlayingState
+            ):
+                self._player.play()
 
     def _update_position(self, position: int) -> None:
         if self._dragging_slider:
             return
         self._position_slider.setValue(int(position))
-        segment = self._segment_playback
+        segment = None if self._use_temp_mp4 else self._segment_playback
         if segment:
             start_ms, end_ms = segment
             total_ms = max(0, end_ms - start_ms)
@@ -538,10 +591,16 @@ class TimeShiftWindow(QtWidgets.QDialog):
             self._player.pause()
 
     def _update_duration(self, duration: int) -> None:
+        duration_ms = max(0, int(duration))
+        if self._temp_mp4_path is None and duration_ms > 0:
+            self._recording_duration_ms = duration_ms
+        base_duration_ms = duration_ms
+        if self._temp_mp4_path and self._recording_duration_ms > 0:
+            base_duration_ms = self._recording_duration_ms
         if self._segment_playback is None:
-            self._position_slider.setRange(0, max(0, int(duration)))
-            self._position_label.setText(self._format_position(int(self._player.position()), int(duration)))
-        self._maybe_refresh_segments(int(duration))
+            self._position_slider.setRange(0, duration_ms)
+            self._position_label.setText(self._format_position(int(self._player.position()), duration_ms))
+        self._maybe_refresh_segments(base_duration_ms)
 
     def _update_play_button_text(self, state: QtMultimedia.QMediaPlayer.PlaybackState) -> None:
         if state == QtMultimedia.QMediaPlayer.PlaybackState.PlayingState:
@@ -553,14 +612,128 @@ class TimeShiftWindow(QtWidgets.QDialog):
         if error == QtMultimedia.QMediaPlayer.Error.NoError:
             return
         details = self._player.errorString() or "不明なエラー"
-        QtWidgets.QMessageBox.information(self, "情報", f"タイムシフト再生に失敗しました: {details}")
+        if self._use_temp_mp4 and self._temp_mp4_is_copy and not self._temp_mp4_retry:
+            self._temp_mp4_retry = True
+            self._player.stop()
+            self._player.setSource(QtCore.QUrl())
+            if self._reencode_temp_mp4():
+                return
+        self._temp_mp4_retry = False
+        QtWidgets.QMessageBox.information(self, "情報", f"クリップ作成ツールでの再生に失敗しました: {details}")
 
     def _on_media_status(self, status: QtMultimedia.QMediaPlayer.MediaStatus) -> None:
         if status == QtMultimedia.QMediaPlayer.MediaStatus.EndOfMedia:
             self._player.pause()
 
     def _prepare_timeshift_source(self, input_path: Path, force: bool = False) -> Path:
+        if self._use_temp_mp4 and self._temp_mp4_path and self._temp_mp4_path.exists():
+            return self._temp_mp4_path
+        self._use_temp_mp4 = False
         return input_path
+
+    def _register_temp_path(self, path: Path) -> None:
+        self._temp_files.add(path)
+
+    def _build_proxy_path(self, start_ms: int, end_ms: int) -> Path:
+        temp_dir = Path(tempfile.gettempdir())
+        base_name = self._recording_path.with_suffix("").name
+        digest = hashlib.md5(str(self._recording_path).encode("utf-8")).hexdigest()[:8]
+        name = f"{base_name}_proxy_{digest}_{start_ms}_{end_ms}.mp4"
+        return temp_dir / name
+
+    def _stop_proxy_process(self) -> None:
+        if self._proxy_process is None:
+            return
+        if self._proxy_process.state() != QtCore.QProcess.ProcessState.NotRunning:
+            self._proxy_process.kill()
+            self._proxy_process.waitForFinished(1000)
+        self._proxy_process = None
+        self._proxy_target_range = None
+
+    def _start_proxy_for_range(self, start_ms: int, end_ms: int) -> None:
+        ffmpeg_path = find_ffmpeg_path()
+        if not ffmpeg_path:
+            return
+        duration_sec = max(0.0, (end_ms - start_ms) / 1000.0)
+        if duration_sec <= 0:
+            return
+        proxy_path = self._build_proxy_path(start_ms, end_ms)
+        self._proxy_target_range = (int(start_ms), int(end_ms))
+        self._proxy_mp4_path = proxy_path
+        self._register_temp_path(proxy_path)
+        if proxy_path.exists():
+            self._switch_to_proxy(proxy_path, start_ms, end_ms)
+            return
+        self._stop_proxy_process()
+        process = QtCore.QProcess(self)
+        self._proxy_process = process
+        process.finished.connect(self._on_proxy_finished)
+        args = [
+            "-y",
+            "-ss",
+            f"{max(0.0, start_ms / 1000.0):.3f}",
+            "-i",
+            str(self._recording_path),
+            "-t",
+            f"{duration_sec:.3f}",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "32",
+            "-vf",
+            "scale=-2:480",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "96k",
+            "-movflags",
+            "+faststart",
+            str(proxy_path),
+        ]
+        process.start(ffmpeg_path, args)
+
+    def _on_proxy_finished(self) -> None:
+        process = self._proxy_process
+        target = self._proxy_target_range
+        proxy_path = self._proxy_mp4_path
+        self._proxy_process = None
+        if process is None or target is None or proxy_path is None:
+            return
+        if process.exitStatus() != QtCore.QProcess.ExitStatus.NormalExit:
+            return
+        if process.exitCode() != 0:
+            return
+        selected = self._segment_list.selectedItems()
+        if not selected:
+            return
+        start_ms, end_ms = selected[0].data(QtCore.Qt.ItemDataRole.UserRole)
+        if (int(start_ms), int(end_ms)) != target:
+            return
+        if not proxy_path.exists():
+            return
+        self._switch_to_proxy(proxy_path, int(start_ms), int(end_ms))
+
+    def _switch_to_proxy(self, proxy_path: Path, start_ms: int, end_ms: int) -> None:
+        current_pos = int(self._player.position())
+        relative_pos = max(0, current_pos - int(start_ms))
+        self._temp_mp4_path = proxy_path
+        self._use_temp_mp4 = True
+        self._temp_mp4_offset_ms = int(start_ms)
+        self._temp_mp4_range = (int(start_ms), int(end_ms))
+        self._temp_mp4_is_copy = False
+        self._temp_mp4_retry = False
+        self._segment_playback = None
+        file_url = QtCore.QUrl.fromLocalFile(str(proxy_path))
+        self._player.setSource(file_url)
+        self._player.play()
+        QtCore.QTimer.singleShot(
+            300,
+            lambda: self._player.setPosition(relative_pos),
+        )
 
     def _format_position(self, position_ms: int, duration_ms: int) -> str:
         return f"{self._format_time(position_ms)} / {self._format_time(duration_ms)}"
@@ -574,6 +747,36 @@ class TimeShiftWindow(QtWidgets.QDialog):
 
     def _format_clock_time(self, timestamp: dt.datetime) -> str:
         return timestamp.strftime("%H:%M:%S")
+
+    def _resolve_segment_duration_ms(self) -> int:
+        hours = max(0, int(self._segment_hours))
+        minutes = max(0, int(self._segment_minutes))
+        seconds = max(0, int(self._segment_seconds))
+        total_seconds = hours * 3600 + minutes * 60 + seconds
+        if total_seconds <= 0:
+            total_seconds = max(
+                1,
+                DEFAULT_TIMESHIFT_SEGMENT_HOURS * 3600
+                + DEFAULT_TIMESHIFT_SEGMENT_MINUTES * 60
+                + DEFAULT_TIMESHIFT_SEGMENT_SECONDS,
+            )
+        return int(total_seconds) * 1000
+
+    def _segment_label_text(self) -> str:
+        total_seconds = max(1, int(self._segment_duration_ms // 1000))
+        hours, rem = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(rem, 60)
+        parts: list[str] = []
+        if hours:
+            parts.append(f"{hours}時間")
+        if minutes:
+            parts.append(f"{minutes}分")
+        if seconds:
+            parts.append(f"{seconds}秒")
+        if not parts:
+            parts.append("1秒")
+        return f"{''.join(parts)}ごとの分割"
+        return f"{seconds}秒ごとの分割"
 
     def _parse_time_text(self, text: str) -> Optional[int]:
         raw = text.strip()
@@ -659,8 +862,7 @@ class TimeShiftWindow(QtWidgets.QDialog):
         self._export_clips(list(self._clips))
 
     def _export_clips(self, clips: list[tuple[int, int]]) -> None:
-        ffmpeg_path = find_ffmpeg_path()
-        if not ffmpeg_path:
+        if not find_ffmpeg_path():
             QtWidgets.QMessageBox.information(self, "情報", "ffmpegが見つかりません。")
             return
         if not self._recording_path.exists():
@@ -750,7 +952,7 @@ class TimeShiftWindow(QtWidgets.QDialog):
         self._refresh_segment_list()
 
     def _build_segment_ranges(self, duration_ms: int) -> list[tuple[int, int]]:
-        segment_ms = 10 * 1000
+        segment_ms = max(1000, int(self._segment_duration_ms))
         ranges: list[tuple[int, int]] = []
         start = 0
         while start < duration_ms:
@@ -779,7 +981,8 @@ class TimeShiftWindow(QtWidgets.QDialog):
     def _refresh_segment_list(self) -> None:
         self._segment_list.clear()
         if not self._segment_ranges:
-            placeholder = QtWidgets.QListWidgetItem("00:00:00～00:00:10")
+            placeholder_end = self._format_time(self._segment_duration_ms)
+            placeholder = QtWidgets.QListWidgetItem(f"00:00～{placeholder_end}")
             placeholder.setFlags(QtCore.Qt.ItemFlag.NoItemFlags)
             placeholder.setForeground(QtGui.QColor("#94a3b8"))
             self._segment_list.addItem(placeholder)
@@ -789,9 +992,14 @@ class TimeShiftWindow(QtWidgets.QDialog):
             if start_time:
                 start_clock = start_time + dt.timedelta(milliseconds=start_ms)
                 end_clock = start_time + dt.timedelta(milliseconds=end_ms)
-                label = f"{self._format_clock_time(start_clock)}～{self._format_clock_time(end_clock)}"
+                label = (
+                    f"{start_clock.hour}時{start_clock.minute}分{start_clock.second}秒～"
+                    f"{end_clock.hour}時{end_clock.minute}分{end_clock.second}秒"
+                )
             else:
                 label = f"{self._format_time(start_ms)}～{self._format_time(end_ms)}"
+            if self._mp4_converted_all or (start_ms, end_ms) in self._mp4_converted_segments:
+                label = f"{label} (mp4)"
             item = QtWidgets.QListWidgetItem(label)
             item.setData(QtCore.Qt.ItemDataRole.UserRole, (start_ms, end_ms))
             self._segment_list.addItem(item)
@@ -802,19 +1010,26 @@ class TimeShiftWindow(QtWidgets.QDialog):
             self._clip_start_input.setText("")
             self._clip_end_input.setText("")
             self._segment_playback = None
+            self._use_temp_mp4 = False
+            self._temp_mp4_range = None
+            self._stop_proxy_process()
             self._seek_segment_range(0, self._player.duration())
             return
         start_ms, end_ms = selected[0].data(QtCore.Qt.ItemDataRole.UserRole)
         self._clip_start_input.setText(self._format_time(start_ms))
         self._clip_end_input.setText(self._format_time(end_ms))
+        if self._use_temp_mp4 and self._temp_mp4_range == (int(start_ms), int(end_ms)):
+            self._segment_playback = None
+            self._position_slider.setRange(0, max(0, int(self._player.duration())))
+            return
+        self._use_temp_mp4 = False
+        self._temp_mp4_range = None
         self._segment_playback = (int(start_ms), int(end_ms))
         self._seek_segment_range(start_ms, end_ms)
+        self._start_proxy_for_range(int(start_ms), int(end_ms))
 
-    def _export_selected_segments(self) -> None:
+    def _convert_to_temp_mp4(self) -> None:
         selected = self._segment_list.selectedItems()
-        if not selected:
-            QtWidgets.QMessageBox.information(self, "情報", "保存する区間を選択してください。")
-            return
         ffmpeg_path = find_ffmpeg_path()
         if not ffmpeg_path:
             QtWidgets.QMessageBox.information(self, "情報", "ffmpegが見つかりません。")
@@ -822,45 +1037,100 @@ class TimeShiftWindow(QtWidgets.QDialog):
         if not self._recording_path.exists():
             QtWidgets.QMessageBox.information(self, "情報", "録画ファイルが見つかりません。")
             return
-        success = 0
-        for index, item in enumerate(selected, start=1):
-            start_ms, end_ms = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        position_offset_ms = 0
+        if selected:
+            start_ms, end_ms = selected[0].data(QtCore.Qt.ItemDataRole.UserRole)
             duration_sec = max(0.0, (end_ms - start_ms) / 1000.0)
+            if duration_sec <= 0:
+                QtWidgets.QMessageBox.information(self, "情報", "変換する区間が不正です。")
+                return
+            position_offset_ms = int(start_ms)
+            self._temp_mp4_range = (int(start_ms), int(end_ms))
+        else:
+            self._temp_mp4_offset_ms = 0
+            self._temp_mp4_range = None
+        self._temp_mp4_offset_ms = int(position_offset_ms)
+        if not self._reencode_temp_mp4():
+            QtWidgets.QMessageBox.information(self, "情報", "MP4変換に失敗しました。")
+            return
+        if selected:
+            start_ms, end_ms = selected[0].data(QtCore.Qt.ItemDataRole.UserRole)
+            self._mp4_converted_all = False
+            self._mp4_converted_segments.add((int(start_ms), int(end_ms)))
+        else:
+            self._mp4_converted_all = True
+            self._mp4_converted_segments.clear()
+        self._refresh_segment_list()
+
+    def _reencode_temp_mp4(self) -> bool:
+        ffmpeg_path = find_ffmpeg_path()
+        if not ffmpeg_path:
+            return False
+        start_sec = None
+        duration_sec = None
+        position_offset_ms = 0
+        if self._temp_mp4_range:
+            start_ms, end_ms = self._temp_mp4_range
+            duration_sec = max(0.0, (end_ms - start_ms) / 1000.0)
+            if duration_sec <= 0:
+                return False
             start_sec = max(0.0, start_ms / 1000.0)
-            output_path = self._recording_path.with_name(
-                f"{self._recording_path.stem}_part_{index:02d}.ts"
-            )
-            output_path = ensure_unique_path(output_path)
-            command = [
-                ffmpeg_path,
-                "-y",
-                "-ss",
-                f"{start_sec:.3f}",
-                "-i",
-                str(self._recording_path),
-                "-t",
-                f"{duration_sec:.3f}",
-                "-c",
-                "copy",
-                "-f",
-                "mpegts",
-                str(output_path),
-            ]
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False,
-            )
-            if result.returncode == 0:
-                success += 1
-        QtWidgets.QMessageBox.information(
-            self,
-            "情報",
-            f"区間の一時保存が完了しました: {success} / {len(selected)}",
+            position_offset_ms = int(start_ms)
+        current_pos = max(0, int(self._player.position()) - position_offset_ms)
+        temp_dir = Path(tempfile.gettempdir())
+        base_name = self._recording_path.with_suffix("").name
+        output_path = ensure_unique_path(temp_dir / f"{base_name}_clip_preview_reencode.mp4")
+        self._register_temp_path(output_path)
+        command = [ffmpeg_path, "-y"]
+        if start_sec is not None:
+            command += ["-ss", f"{start_sec:.3f}"]
+        command += ["-i", str(self._recording_path)]
+        if duration_sec is not None:
+            command += ["-t", f"{duration_sec:.3f}"]
+        command += [
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "28",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
         )
+        if result.returncode != 0:
+            return False
+        if not output_path.exists() or output_path.stat().st_size == 0:
+            return False
+        self._temp_mp4_path = output_path
+        self._use_temp_mp4 = True
+        self._temp_mp4_offset_ms = int(position_offset_ms)
+        self._temp_mp4_is_copy = False
+        self._temp_mp4_retry = False
+        self._segment_playback = None
+        self._playback_path = output_path
+        file_url = QtCore.QUrl.fromLocalFile(str(output_path))
+        self._player.setSource(file_url)
+        self._player.play()
+        QtCore.QTimer.singleShot(
+            500,
+            lambda: self._player.setPosition(current_pos),
+        )
+        return True
 
     def _seek_segment_range(self, start_ms: int, end_ms: int) -> None:
         duration = int(self._player.duration())
@@ -877,4 +1147,11 @@ class TimeShiftWindow(QtWidgets.QDialog):
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         self._player.stop()
         self._player.setSource(QtCore.QUrl())
+        self._stop_proxy_process()
+        for path in list(self._temp_files):
+            if path.exists():
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
         super().closeEvent(event)

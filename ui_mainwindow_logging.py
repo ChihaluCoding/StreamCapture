@@ -65,24 +65,10 @@ class MainWindowLoggingMixin:  # MainWindowLoggingMixin定義
             if label not in omit_labels:  # 省略対象でない場合
                 body = f"{label} {body}".strip()  # ラベルを本文に加える
         return category, body  # 整形後のカテゴリと本文を返却
-    def _is_log_category_enabled(self, category: str) -> bool:  # ログカテゴリの表示可否を確認
-        mapping = {  # カテゴリと設定キーの対応
-            "監視": "log_show_monitor",  # 監視ログの表示設定
-            "録画": "log_show_recording",  # 録画ログの表示設定
-            "プレビュー": "log_show_preview",  # プレビューログの表示設定
-            "YouTube": "log_show_youtube",  # YouTubeログの表示設定
-            "情報": "log_show_info",  # 情報ログの表示設定
-        }  # 対応表の終了
-        key = mapping.get(category)  # 対応キーを取得
-        if not key:  # 対応が無い場合
-            return True  # 既定で表示する
-        return load_bool_setting(key, True)  # 設定値を取得して返却
     def _append_log(self, message: str) -> None:  # ログ追加処理
         timestamp = QtCore.QDateTime.currentDateTime().toString("HH:mm:ss")  # 時刻のみのタイムスタンプ生成
         category, body = self._format_log_message(message)  # ログを整形
         if not category or not body:  # 空のログの場合
-            return  # 追記しない
-        if not self._is_log_category_enabled(category):  # 表示対象外の場合
             return  # 追記しない
         self.log_output.append(f"{timestamp} | {category} | {body}")  # ログを追記
     def _show_tray_notification(self, title: str, message: str) -> None:  # タスクトレイ通知を表示
@@ -107,7 +93,7 @@ class MainWindowLoggingMixin:  # MainWindowLoggingMixin定義
         QtWidgets.QMessageBox.information(  # 情報ダイアログを表示
             self,  # 親ウィンドウ指定
             "このアプリについて",  # タイトル指定
-            "配信録画くん\n配信の録画・自動監視をサポートします。",  # 表示メッセージ
+            "はいろく！\n配信の録画・自動監視をサポートします。",  # 表示メッセージ
         )  # ダイアログ表示終了
     def _show_api_help(self) -> None:  # APIキー案内ダイアログ表示
         message = (  # 案内メッセージを組み立て

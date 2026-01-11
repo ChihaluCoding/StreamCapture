@@ -5,7 +5,9 @@ from string import Template
 from config import (
     DEFAULT_AUTO_CHECK_INTERVAL_SEC, DEFAULT_AUTO_ENABLED, DEFAULT_BILIBILI_ENTRIES,
     DEFAULT_ABEMA_ENTRIES, DEFAULT_BIGO_ENTRIES, DEFAULT_FUWATCH_ENTRIES,
-    DEFAULT_LIVE17_ENTRIES,
+    DEFAULT_LIVE17_ENTRIES, DEFAULT_TIMESHIFT_SEGMENT_HOURS,
+    DEFAULT_TIMESHIFT_SEGMENT_MINUTES,
+    DEFAULT_TIMESHIFT_SEGMENT_SECONDS,
     DEFAULT_KICK_ENTRIES, DEFAULT_NICONICO_ENTRIES, DEFAULT_OPENRECTV_ENTRIES,
     DEFAULT_OUTPUT_FORMAT, DEFAULT_RADIKO_ENTRIES, DEFAULT_RETRY_COUNT,
     DEFAULT_RETRY_WAIT_SEC, DEFAULT_TIKTOK_ENTRIES, DEFAULT_TWITCASTING_ENTRIES,
@@ -443,15 +445,6 @@ class SettingsDialog(QtWidgets.QDialog):
                 background-color: $c_combo_focus_bg;
                 border: 2px solid $c_focus_border;
             }
-            QComboBox::drop-down { border: none; width: 30px; }
-            QComboBox::down-arrow {
-                image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 6px solid $c_combo_arrow;
-                margin-right: 10px;
-            }
-
             /* --- 通常ボタン --- */
             QPushButton {
                 background-color: $c_button_bg;
@@ -505,11 +498,13 @@ class SettingsDialog(QtWidgets.QDialog):
         self.sidebar.setFixedWidth(240)
         self.sidebar.addItems([
             "一般設定",
+            "保存・整理",
             "ネットワーク・録画",
             "自動化・監視",
             "監視リスト",
+            "API連携",
+            "Google Drive",
             "ログ・システム",
-            "API連携"
         ])
         self.sidebar.setCurrentRow(0)
         main_layout.addWidget(self.sidebar)
@@ -531,7 +526,7 @@ class SettingsDialog(QtWidgets.QDialog):
         footer_layout.setContentsMargins(24, 16, 24, 16)
         footer_layout.setSpacing(12)
         
-        self.btn_cancel = QtWidgets.QPushButton("キャンセル")
+        self.btn_cancel = QtWidgets.QPushButton("閉じる")
         self.btn_cancel.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.btn_cancel.setFixedSize(100, 40)
         self.btn_cancel.clicked.connect(self.reject)
@@ -557,11 +552,13 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _create_pages(self):
         self.stack.addWidget(self._page_general())
+        self.stack.addWidget(self._page_storage())
         self.stack.addWidget(self._page_network())
         self.stack.addWidget(self._page_automation())
         self.stack.addWidget(self._page_monitoring())
-        self.stack.addWidget(self._page_system())
         self.stack.addWidget(self._page_api())
+        self.stack.addWidget(self._page_gdrive())
+        self.stack.addWidget(self._page_system())
 
     def _make_scrollable_page(self, title):
         page = QtWidgets.QWidget()
@@ -631,50 +628,83 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _page_general(self):
         page, layout = self._make_scrollable_page("一般設定")
-        
-        # 保存先
-        self.output_dir_input = QtWidgets.QLineEdit()
-        self.output_browse = QtWidgets.QPushButton("参照")
-        self.output_browse.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self.output_browse.clicked.connect(self._browse_output_dir)
-        
-        h_box = QtWidgets.QHBoxLayout()
-        h_box.addWidget(self.output_dir_input)
-        h_box.addWidget(self.output_browse)
-        wrapper = QtWidgets.QWidget()
-        wrapper.setLayout(h_box)
-        h_box.setContentsMargins(0,0,0,0)
-        
-        self._add_input_card(layout, "保存先フォルダ", wrapper, "録画ファイルの保存先を指定します。")
-
-        # フォーマット
-        self.output_format_input = QtWidgets.QComboBox()
-        self.output_format_input.addItems([
-            "TS (無劣化・推奨)",
-            "MP4 (高速コピー)",
-            "MP4 (再エンコード・軽量)",
-            "MOV (コピー)",
-            "FLV (コピー)",
-            "MKV (コピー)",
-            "MP3 (音声のみ)",
-            "WAV (音声のみ)",
-        ])
-        self.output_format_input.setItemData(0, OUTPUT_FORMAT_TS)
-        self.output_format_input.setItemData(1, OUTPUT_FORMAT_MP4_COPY)
-        self.output_format_input.setItemData(2, OUTPUT_FORMAT_MP4_LIGHT)
-        self.output_format_input.setItemData(3, OUTPUT_FORMAT_MOV)
-        self.output_format_input.setItemData(4, OUTPUT_FORMAT_FLV)
-        self.output_format_input.setItemData(5, OUTPUT_FORMAT_MKV)
-        self.output_format_input.setItemData(6, OUTPUT_FORMAT_MP3)
-        self.output_format_input.setItemData(7, OUTPUT_FORMAT_WAV)
-        self.output_format_input.setMinimumHeight(40)
-        self._add_input_card(layout, "保存フォーマット", self.output_format_input, "用途に合わせてファイル形式を選択してください。")
-
         # プレビュー音量
         self.preview_volume_input = ModernSpinBox('float')
         self.preview_volume_input.setRange(0.0, 1.0)
         self.preview_volume_input.setSingleStep(0.1)
         self._add_card(layout, "プレビュー音量", self.preview_volume_input, "プレビュー再生時の初期音量 (0.0 ~ 1.0)")
+
+        self.timeshift_segment_hours_input = ModernSpinBox('int')
+        self.timeshift_segment_hours_input.setRange(0, 99)
+        self.timeshift_segment_minutes_input = ModernSpinBox('int')
+        self.timeshift_segment_minutes_input.setRange(0, 59)
+        self.timeshift_segment_seconds_input = ModernSpinBox('int')
+        self.timeshift_segment_seconds_input.setRange(0, 59)
+        segment_row = QtWidgets.QHBoxLayout()
+        segment_row.setSpacing(12)
+        segment_row.addWidget(self.timeshift_segment_hours_input)
+        segment_row.addWidget(QtWidgets.QLabel("時間"))
+        segment_row.addWidget(self.timeshift_segment_minutes_input)
+        segment_row.addWidget(QtWidgets.QLabel("分"))
+        segment_row.addWidget(self.timeshift_segment_seconds_input)
+        segment_row.addWidget(QtWidgets.QLabel("秒"))
+        segment_row.addStretch(1)
+        segment_widget = QtWidgets.QWidget()
+        segment_widget.setLayout(segment_row)
+        self._add_input_card(
+            layout,
+            "クリップ分割間隔",
+            segment_widget,
+            "時間/分/秒で分割間隔を指定します (0時間0分0秒は10秒として扱います)。",
+        )
+
+        layout.addStretch(1)
+        return page
+
+    def _page_storage(self):
+        page, layout = self._make_scrollable_page("保存・整理")
+
+        # 保存先
+        self.output_dir_input = QtWidgets.QLineEdit()
+        self.output_browse = QtWidgets.QPushButton("参照")
+        self.output_browse.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.output_browse.clicked.connect(self._browse_output_dir)
+
+        h_box = QtWidgets.QHBoxLayout()
+        h_box.addWidget(self.output_dir_input)
+        h_box.addWidget(self.output_browse)
+        wrapper = QtWidgets.QWidget()
+        wrapper.setLayout(h_box)
+        h_box.setContentsMargins(0, 0, 0, 0)
+
+        self._add_input_card(layout, "保存先フォルダ", wrapper, "録画ファイルの保存先を指定します。")
+
+        # フォーマット
+        self.output_format_input = QtWidgets.QComboBox()
+        self.output_format_input.addItems([
+            "TS",
+            "MP4",
+            "MOV",
+            "FLV",
+            "MKV",
+            "MP3",
+            "WAV",
+        ])
+        self.output_format_input.setItemData(0, OUTPUT_FORMAT_TS)
+        self.output_format_input.setItemData(1, OUTPUT_FORMAT_MP4_COPY)
+        self.output_format_input.setItemData(2, OUTPUT_FORMAT_MOV)
+        self.output_format_input.setItemData(3, OUTPUT_FORMAT_FLV)
+        self.output_format_input.setItemData(4, OUTPUT_FORMAT_MKV)
+        self.output_format_input.setItemData(5, OUTPUT_FORMAT_MP3)
+        self.output_format_input.setItemData(6, OUTPUT_FORMAT_WAV)
+        self.output_format_input.setMinimumHeight(40)
+        self._add_input_card(layout, "保存フォーマット", self.output_format_input, "用途に合わせてファイル形式を選択してください。")
+
+        self.output_date_folder_input = ToggleSwitch()
+        self._add_card(layout, "日付フォルダで整理", self.output_date_folder_input, "録画日ごとにフォルダ分けします。")
+
+        self.output_filename_with_channel_input = ToggleSwitch()
+        self._add_card(layout, "ファイル名に配信者名を付ける", self.output_filename_with_channel_input, "録画ファイル名に配信者名を付加します。")
 
         self.keep_ts_input = ToggleSwitch()
         self._add_card(layout, "TSファイルを残す", self.keep_ts_input, "MP4保存時でも元のTSファイルを残します。")
@@ -793,21 +823,6 @@ class SettingsDialog(QtWidgets.QDialog):
         self.log_panel_visible_input = ToggleSwitch()
         self._add_card(layout, "ログパネル表示", self.log_panel_visible_input, "右側のログパネルを表示します。")
 
-        self.log_show_monitor_input = ToggleSwitch()
-        self._add_card(layout, "監視ログ", self.log_show_monitor_input)
-        
-        self.log_show_recording_input = ToggleSwitch()
-        self._add_card(layout, "録画ログ", self.log_show_recording_input)
-        
-        self.log_show_preview_input = ToggleSwitch()
-        self._add_card(layout, "プレビューログ", self.log_show_preview_input)
-        
-        self.log_show_youtube_input = ToggleSwitch()
-        self._add_card(layout, "YouTube詳細", self.log_show_youtube_input)
-        
-        self.log_show_info_input = ToggleSwitch()
-        self._add_card(layout, "その他情報", self.log_show_info_input)
-
         layout.addStretch(1)
         return page
 
@@ -827,7 +842,32 @@ class SettingsDialog(QtWidgets.QDialog):
         self.twitch_client_secret_input.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
         self.twitch_client_secret_input.setPlaceholderText("Client Secret")
         self._add_input_card(layout, "Twitch Client Secret", self.twitch_client_secret_input)
-        
+        layout.addStretch(1)
+        return page
+
+    def _page_gdrive(self):
+        page, layout = self._make_scrollable_page("Google Drive連携")
+
+        self.gdrive_enabled_input = ToggleSwitch()
+        self._add_card(layout, "Google Driveへ自動アップロード", self.gdrive_enabled_input, "録画完了後にGoogle Driveへアップロードします。")
+
+        self.gdrive_credentials_input = QtWidgets.QLineEdit()
+        self.gdrive_credentials_input.setPlaceholderText("client_secret.json のパス")
+        self.gdrive_credentials_browse = QtWidgets.QPushButton("参照")
+        self.gdrive_credentials_browse.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.gdrive_credentials_browse.clicked.connect(self._browse_gdrive_credentials)
+        creds_row = QtWidgets.QHBoxLayout()
+        creds_row.addWidget(self.gdrive_credentials_input)
+        creds_row.addWidget(self.gdrive_credentials_browse)
+        creds_wrapper = QtWidgets.QWidget()
+        creds_wrapper.setLayout(creds_row)
+        creds_row.setContentsMargins(0, 0, 0, 0)
+        self._add_input_card(layout, "Google Drive 認証情報 (JSON)", creds_wrapper, "Google Cloudで作成したOAuthクライアントJSONを指定します。")
+
+        self.gdrive_folder_input = QtWidgets.QLineEdit()
+        self.gdrive_folder_input.setPlaceholderText("保存先フォルダID (未指定はマイドライブ直下)")
+        self._add_input_card(layout, "Google Drive 保存先フォルダID", self.gdrive_folder_input, "フォルダIDを指定すると、そのフォルダに保存します。")
+
         layout.addStretch(1)
         return page
 
@@ -840,6 +880,13 @@ class SettingsDialog(QtWidgets.QDialog):
         idx = self.output_format_input.findData(fmt)
         if idx < 0: idx = self.output_format_input.findData(DEFAULT_OUTPUT_FORMAT)
         self.output_format_input.setCurrentIndex(max(0, idx))
+
+        self.output_date_folder_input.setChecked(load_bool_setting("output_date_folder_enabled", False))
+        self.output_filename_with_channel_input.setChecked(load_bool_setting("output_filename_with_channel", False))
+
+        self.gdrive_enabled_input.setChecked(load_bool_setting("gdrive_enabled", False))
+        self.gdrive_credentials_input.setText(load_setting_value("gdrive_credentials_path", "", str))
+        self.gdrive_folder_input.setText(load_setting_value("gdrive_folder_id", "", str))
             
         self.retry_count_input.setValue(load_setting_value("retry_count", DEFAULT_RETRY_COUNT, int))
         self.retry_wait_input.setValue(load_setting_value("retry_wait", DEFAULT_RETRY_WAIT_SEC, int))
@@ -847,6 +894,15 @@ class SettingsDialog(QtWidgets.QDialog):
         self.stream_timeout_input.setValue(load_setting_value("stream_timeout", 60, int))
         self.preview_volume_input.setValue(load_setting_value("preview_volume", 0.5, float))
         self.keep_ts_input.setChecked(load_bool_setting("keep_ts_file", False))
+        self.timeshift_segment_hours_input.setValue(
+            load_setting_value("timeshift_segment_hours", DEFAULT_TIMESHIFT_SEGMENT_HOURS, int)
+        )
+        self.timeshift_segment_minutes_input.setValue(
+            load_setting_value("timeshift_segment_minutes", DEFAULT_TIMESHIFT_SEGMENT_MINUTES, int)
+        )
+        self.timeshift_segment_seconds_input.setValue(
+            load_setting_value("timeshift_segment_seconds", DEFAULT_TIMESHIFT_SEGMENT_SECONDS, int)
+        )
         
         self.tray_enabled_input.setChecked(load_bool_setting("tray_enabled", False))
         self.auto_start_input.setChecked(load_bool_setting("auto_start_enabled", False))
@@ -856,11 +912,6 @@ class SettingsDialog(QtWidgets.QDialog):
         self.auto_check_interval_input.setValue(load_setting_value("auto_check_interval", DEFAULT_AUTO_CHECK_INTERVAL_SEC, int))
         self._update_auto_record_option_state(bool(self.auto_enabled_input.isChecked()))
 
-        self.log_show_monitor_input.setChecked(load_bool_setting("log_show_monitor", True))
-        self.log_show_recording_input.setChecked(load_bool_setting("log_show_recording", True))
-        self.log_show_preview_input.setChecked(load_bool_setting("log_show_preview", True))
-        self.log_show_youtube_input.setChecked(load_bool_setting("log_show_youtube", True))
-        self.log_show_info_input.setChecked(load_bool_setting("log_show_info", True))
         self.log_panel_visible_input.setChecked(load_bool_setting("log_panel_visible", False))
 
         self.twitcasting_input.setPlainText(load_setting_value("twitcasting_entries", DEFAULT_TWITCASTING_ENTRIES, str))
@@ -885,12 +936,20 @@ class SettingsDialog(QtWidgets.QDialog):
     def _save_settings(self) -> None:
         save_setting_value("output_dir", self.output_dir_input.text().strip())
         save_setting_value("output_format", str(self.output_format_input.currentData()))
+        save_setting_value("output_date_folder_enabled", int(self.output_date_folder_input.isChecked()))
+        save_setting_value("output_filename_with_channel", int(self.output_filename_with_channel_input.isChecked()))
+        save_setting_value("gdrive_enabled", int(self.gdrive_enabled_input.isChecked()))
+        save_setting_value("gdrive_credentials_path", self.gdrive_credentials_input.text().strip())
+        save_setting_value("gdrive_folder_id", self.gdrive_folder_input.text().strip())
         save_setting_value("retry_count", int(self.retry_count_input.value()))
         save_setting_value("retry_wait", int(self.retry_wait_input.value()))
         save_setting_value("http_timeout", int(self.http_timeout_input.value()))
         save_setting_value("stream_timeout", int(self.stream_timeout_input.value()))
         save_setting_value("preview_volume", float(self.preview_volume_input.value()))
         save_setting_value("keep_ts_file", int(self.keep_ts_input.isChecked()))
+        save_setting_value("timeshift_segment_hours", int(self.timeshift_segment_hours_input.value()))
+        save_setting_value("timeshift_segment_minutes", int(self.timeshift_segment_minutes_input.value()))
+        save_setting_value("timeshift_segment_seconds", int(self.timeshift_segment_seconds_input.value()))
         
         save_setting_value("tray_enabled", int(self.tray_enabled_input.isChecked()))
         save_setting_value("auto_start_enabled", int(self.auto_start_input.isChecked()))
@@ -899,11 +958,6 @@ class SettingsDialog(QtWidgets.QDialog):
         save_setting_value("auto_startup_recording", int(self.auto_startup_input.isChecked()))
         save_setting_value("auto_check_interval", int(self.auto_check_interval_input.value()))
         
-        save_setting_value("log_show_monitor", int(self.log_show_monitor_input.isChecked()))
-        save_setting_value("log_show_recording", int(self.log_show_recording_input.isChecked()))
-        save_setting_value("log_show_preview", int(self.log_show_preview_input.isChecked()))
-        save_setting_value("log_show_youtube", int(self.log_show_youtube_input.isChecked()))
-        save_setting_value("log_show_info", int(self.log_show_info_input.isChecked()))
         save_setting_value("log_panel_visible", int(self.log_panel_visible_input.isChecked()))
         
         save_setting_value("twitcasting_entries", self.twitcasting_input.toPlainText().strip())
@@ -924,13 +978,34 @@ class SettingsDialog(QtWidgets.QDialog):
         save_setting_value("twitch_client_id", self.twitch_client_id_input.text().strip())
         save_setting_value("twitch_client_secret", self.twitch_client_secret_input.text().strip())
         save_setting_value("twitch_channels", self.twitch_channels_input.toPlainText().strip())
-        
-        self.accept()
+        parent = self.parent()
+        if parent is not None:
+            if hasattr(parent, "_load_settings_to_ui"):
+                parent._load_settings_to_ui()
+            if hasattr(parent, "_configure_auto_monitor"):
+                parent._configure_auto_monitor()
+            if hasattr(parent, "_apply_tray_setting"):
+                parent._apply_tray_setting(True)
+            if hasattr(parent, "_apply_startup_setting"):
+                parent._apply_startup_setting(True)
+            if hasattr(parent, "_apply_log_panel_visibility"):
+                parent._apply_log_panel_visibility()
+        QtWidgets.QMessageBox.information(self, "情報", "設定を保存しました。")
 
     def _browse_output_dir(self) -> None:
         directory = QtWidgets.QFileDialog.getExistingDirectory(self, "出力フォルダを選択")
         if directory:
             self.output_dir_input.setText(directory)
 
+    def _browse_gdrive_credentials(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Google Drive 認証情報(JSON)を選択",
+            "",
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if path:
+            self.gdrive_credentials_input.setText(path)
+
     def _update_auto_record_option_state(self, enabled: bool) -> None:
-        self.auto_startup_input.setEnabled(enabled)
+        self.auto_startup_input.setEnabled(True)
