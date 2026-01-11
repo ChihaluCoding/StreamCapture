@@ -8,4 +8,6 @@ icon.ico
 StreamCapture.csv
 dist
 build
+client_secret.json
 client_secrets.json
+gdrive_token.json
