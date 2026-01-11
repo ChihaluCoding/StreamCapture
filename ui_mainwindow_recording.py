@@ -18,6 +18,7 @@ from config import (  # 定数群
     DEFAULT_OPENRECTV_ENTRIES,  # OPENREC.tv既定
     DEFAULT_OUTPUT_FORMAT,  # 出力形式の既定
     DEFAULT_QUALITY,  # 画質既定
+    DEFAULT_RECORDING_QUALITY,  # 録画画質の既定
     DEFAULT_RADIKO_ENTRIES,  # radiko既定
     DEFAULT_RETRY_COUNT,  # リトライ回数既定
     DEFAULT_RETRY_WAIT_SEC,  # リトライ待機既定
@@ -100,6 +101,14 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
             name = derive_platform_label_for_folder(url) or derive_channel_label(url)
         return f"{platform} / {name}" if name else platform
 
+    def _notify_live_detected(self, url: str) -> None:  # 配信検知通知
+        label = self._format_recording_label(url)
+        self._append_log(f"自動監視: 通知のみ {url}")  # 通知のみログ
+        self._show_tray_notification(
+            "はいろく！",
+            f"{label} の配信を検知しました（通知のみ）。",
+        )
+
     def _build_tray_tooltip(self) -> str:
         base = "はいろく！"
         lines: list[str] = []
@@ -119,6 +128,198 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         if not lines:
             return base
         return base + "\n" + "\n".join(lines)
+
+    def _get_notify_only_entries(self) -> list[str]:  # 通知のみ対象の取得
+        raw_text = load_setting_value("auto_notify_only_entries", "", str)
+        return parse_auto_url_list(raw_text)
+
+    def _youtube_entry_key(self, entry: str) -> str:  # YouTube通知判定キー
+        kind, value = normalize_youtube_entry(entry)
+        if not kind or not value:
+            return ""
+        if kind in ("handle", "user"):
+            value = value.lower()
+        return f"{kind}:{value}"
+
+    def _twitch_entry_key(self, entry: str) -> str:  # Twitch通知判定キー
+        return normalize_twitch_login(entry)
+
+    def _split_entries_by_notify_key(
+        self,
+        entries: list[str],
+        notify_entries: list[str],
+        key_func,
+    ) -> tuple[list[str], list[str]]:  # 通知のみ対象で分割
+        if not entries:
+            return [], []
+        notify_keys: set[str] = set()
+        for entry in notify_entries:
+            key = key_func(entry)
+            if key:
+                notify_keys.add(key)
+        if not notify_keys:
+            return list(entries), []
+        record_entries: list[str] = []
+        notify_only_entries: list[str] = []
+        for entry in entries:
+            key = key_func(entry)
+            if key in notify_keys:
+                notify_only_entries.append(entry)
+            else:
+                record_entries.append(entry)
+        return record_entries, notify_only_entries
+
+    def _split_urls_by_notify_entries(
+        self,
+        urls: list[str],
+        notify_entries: list[str],
+        normalizer,
+    ) -> tuple[list[str], list[str]]:  # 通知のみURLで分割
+        if not urls:
+            return [], []
+        notify_urls = normalize_platform_urls(notify_entries, normalizer)
+        if not notify_urls:
+            return list(urls), []
+        notify_set = set(notify_urls)
+        record_urls = [url for url in urls if url not in notify_set]
+        notify_only_urls = [url for url in urls if url in notify_set]
+        return record_urls, notify_only_urls
+
+    def _collect_auto_monitor_targets(self) -> dict:  # 自動監視対象を収集
+        notify_only_all = load_bool_setting("auto_notify_only", False)
+        notify_entries = self._get_notify_only_entries()
+        youtube_entries = self._get_auto_youtube_channels()
+        twitch_entries = self._get_auto_twitch_channels()
+        twitcasting_urls = self._get_auto_twitcasting_urls()
+        niconico_urls = self._get_auto_niconico_urls()
+        tiktok_urls = self._get_auto_tiktok_urls()
+        fuwatch_urls = self._get_auto_fuwatch_urls()
+        kick_urls = self._get_auto_kick_urls()
+        abema_urls = self._get_auto_abema_urls()
+        live17_urls = self._get_auto_17live_urls()
+        bigo_urls = self._get_auto_bigo_urls()
+        radiko_urls = self._get_auto_radiko_urls()
+        openrectv_urls = self._get_auto_openrectv_urls()
+        bilibili_urls = self._get_auto_bilibili_urls()
+        merged_urls = merge_unique_urls(
+            twitcasting_urls,
+            niconico_urls,
+            tiktok_urls,
+            fuwatch_urls,
+            kick_urls,
+            abema_urls,
+            live17_urls,
+            bigo_urls,
+            radiko_urls,
+            openrectv_urls,
+            bilibili_urls,
+        )
+        if notify_only_all:
+            youtube_record, youtube_notify = [], youtube_entries
+            twitch_record, twitch_notify = [], twitch_entries
+            record_urls, notify_urls = [], merged_urls
+        else:
+            youtube_record, youtube_notify = self._split_entries_by_notify_key(
+                youtube_entries,
+                notify_entries,
+                self._youtube_entry_key,
+            )
+            twitch_record, twitch_notify = self._split_entries_by_notify_key(
+                twitch_entries,
+                notify_entries,
+                self._twitch_entry_key,
+            )
+            twitcasting_record, twitcasting_notify = self._split_urls_by_notify_entries(
+                twitcasting_urls,
+                notify_entries,
+                normalize_twitcasting_entry,
+            )
+            niconico_record, niconico_notify = self._split_urls_by_notify_entries(
+                niconico_urls,
+                notify_entries,
+                normalize_niconico_entry,
+            )
+            tiktok_record, tiktok_notify = self._split_urls_by_notify_entries(
+                tiktok_urls,
+                notify_entries,
+                normalize_tiktok_entry,
+            )
+            fuwatch_record, fuwatch_notify = self._split_urls_by_notify_entries(
+                fuwatch_urls,
+                notify_entries,
+                normalize_fuwatch_entry,
+            )
+            kick_record, kick_notify = self._split_urls_by_notify_entries(
+                kick_urls,
+                notify_entries,
+                normalize_kick_entry,
+            )
+            abema_record, abema_notify = self._split_urls_by_notify_entries(
+                abema_urls,
+                notify_entries,
+                normalize_abema_entry,
+            )
+            live17_record, live17_notify = self._split_urls_by_notify_entries(
+                live17_urls,
+                notify_entries,
+                normalize_17live_entry,
+            )
+            bigo_record, bigo_notify = self._split_urls_by_notify_entries(
+                bigo_urls,
+                notify_entries,
+                normalize_bigo_entry,
+            )
+            radiko_record, radiko_notify = self._split_urls_by_notify_entries(
+                radiko_urls,
+                notify_entries,
+                normalize_radiko_entry,
+            )
+            openrectv_record, openrectv_notify = self._split_urls_by_notify_entries(
+                openrectv_urls,
+                notify_entries,
+                normalize_openrectv_entry,
+            )
+            bilibili_record, bilibili_notify = self._split_urls_by_notify_entries(
+                bilibili_urls,
+                notify_entries,
+                normalize_bilibili_entry,
+            )
+            record_urls = merge_unique_urls(
+                twitcasting_record,
+                niconico_record,
+                tiktok_record,
+                fuwatch_record,
+                kick_record,
+                abema_record,
+                live17_record,
+                bigo_record,
+                radiko_record,
+                openrectv_record,
+                bilibili_record,
+            )
+            notify_urls = merge_unique_urls(
+                twitcasting_notify,
+                niconico_notify,
+                tiktok_notify,
+                fuwatch_notify,
+                kick_notify,
+                abema_notify,
+                live17_notify,
+                bigo_notify,
+                radiko_notify,
+                openrectv_notify,
+                bilibili_notify,
+            )
+        has_targets = bool(youtube_entries or twitch_entries or merged_urls)
+        return {
+            "youtube_record": youtube_record,
+            "youtube_notify": youtube_notify,
+            "twitch_record": twitch_record,
+            "twitch_notify": twitch_notify,
+            "record_urls": record_urls,
+            "notify_urls": notify_urls,
+            "has_targets": has_targets,
+        }
 
     def _build_tray_message(self) -> str:
         lines: list[str] = []
@@ -275,33 +476,8 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
             if enabled:  # 自動録画が有効の場合
                 self._append_log("自動監視: 手動停止中のため停止します。")  # 手動停止中ログ
             return  # 手動停止中は再設定しない
-        youtube_channels = self._get_auto_youtube_channels()  # YouTube配信者一覧を取得
-        twitch_channels = self._get_auto_twitch_channels()  # Twitch配信者一覧を取得
-        twitcasting_urls = self._get_auto_twitcasting_urls()  # ツイキャスURL一覧を取得
-        niconico_urls = self._get_auto_niconico_urls()  # ニコ生URL一覧を取得
-        tiktok_urls = self._get_auto_tiktok_urls()  # TikTok URL一覧を取得
-        fuwatch_urls = self._get_auto_fuwatch_urls()  # ふわっちURL一覧を取得
-        kick_urls = self._get_auto_kick_urls()  # Kick URL一覧を取得
-        abema_urls = self._get_auto_abema_urls()  # AbemaTV URL一覧を取得
-        live17_urls = self._get_auto_17live_urls()  # 17LIVE URL一覧を取得
-        bigo_urls = self._get_auto_bigo_urls()  # BIGO LIVE URL一覧を取得
-        radiko_urls = self._get_auto_radiko_urls()  # radiko URL一覧を取得
-        openrectv_urls = self._get_auto_openrectv_urls()  # OPENREC.tv URL一覧を取得
-        bilibili_urls = self._get_auto_bilibili_urls()  # bilibili URL一覧を取得
-        merged_urls = merge_unique_urls(  # 監視URLを結合
-            twitcasting_urls,  # ツイキャスURL一覧
-            niconico_urls,  # ニコ生URL一覧
-            tiktok_urls,  # TikTok URL一覧
-            fuwatch_urls,  # ふわっちURL一覧
-            kick_urls,  # Kick URL一覧
-            abema_urls,  # AbemaTV URL一覧
-            live17_urls,  # 17LIVE URL一覧
-            bigo_urls,  # BIGO LIVE URL一覧
-            radiko_urls,  # radiko URL一覧
-            openrectv_urls,  # OPENREC.tv URL一覧
-            bilibili_urls,  # bilibili URL一覧
-        )  # 結合の終了
-        has_targets = bool(youtube_channels or twitch_channels or merged_urls)  # 監視対象の有無
+        targets = self._collect_auto_monitor_targets()  # 監視対象を集約
+        has_targets = bool(targets.get("has_targets"))  # 監視対象の有無
         auto_startup = load_bool_setting("auto_startup_recording", True)  # 起動時自動録画設定を取得
         if enabled and has_targets and (auto_startup or self.auto_monitor_forced):  # 有効かつ監視対象がある場合
             self.auto_timer.setInterval(int(interval) * 1000)  # タイマー間隔を設定
@@ -432,52 +608,43 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
             return  # 何もしない
         if not load_bool_setting("auto_enabled", DEFAULT_AUTO_ENABLED):  # 無効の場合
             return  # 何もしない
-        twitcasting_urls = self._get_auto_twitcasting_urls()  # ツイキャスURL一覧を取得
-        niconico_urls = self._get_auto_niconico_urls()  # ニコ生URL一覧を取得
-        tiktok_urls = self._get_auto_tiktok_urls()  # TikTok URL一覧を取得
-        fuwatch_urls = self._get_auto_fuwatch_urls()  # ふわっちURL一覧を取得
-        kick_urls = self._get_auto_kick_urls()  # Kick URL一覧を取得
-        abema_urls = self._get_auto_abema_urls()  # AbemaTV URL一覧を取得
-        live17_urls = self._get_auto_17live_urls()  # 17LIVE URL一覧を取得
-        bigo_urls = self._get_auto_bigo_urls()  # BIGO LIVE URL一覧を取得
-        radiko_urls = self._get_auto_radiko_urls()  # radiko URL一覧を取得
-        openrectv_urls = self._get_auto_openrectv_urls()  # OPENREC.tv URL一覧を取得
-        bilibili_urls = self._get_auto_bilibili_urls()  # bilibili URL一覧を取得
-        youtube_channels = self._get_auto_youtube_channels()  # YouTube配信者一覧を取得
-        twitch_channels = self._get_auto_twitch_channels()  # Twitch配信者一覧を取得
-        merged_urls = merge_unique_urls(  # 監視URLを結合
-            twitcasting_urls,  # ツイキャスURL一覧
-            niconico_urls,  # ニコ生URL一覧
-            tiktok_urls,  # TikTok URL一覧
-            fuwatch_urls,  # ふわっちURL一覧
-            kick_urls,  # Kick URL一覧
-            abema_urls,  # AbemaTV URL一覧
-            live17_urls,  # 17LIVE URL一覧
-            bigo_urls,  # BIGO LIVE URL一覧
-            radiko_urls,  # radiko URL一覧
-            openrectv_urls,  # OPENREC.tv URL一覧
-            bilibili_urls,  # bilibili URL一覧
-        )  # 結合の終了
-        if not (merged_urls or youtube_channels or twitch_channels):  # 対象が無い場合
+        targets = self._collect_auto_monitor_targets()  # 監視対象を取得
+        if not targets.get("has_targets"):  # 対象が無い場合
             return  # 何もしない
-        self._start_auto_check(merged_urls)  # 自動監視を開始
-    def _start_auto_check(self, urls: list[str]) -> None:  # 自動監視の開始
+        self._start_auto_check(
+            targets.get("record_urls", []),
+            targets.get("notify_urls", []),
+            targets.get("youtube_record", []),
+            targets.get("youtube_notify", []),
+            targets.get("twitch_record", []),
+            targets.get("twitch_notify", []),
+        )  # 自動監視を開始
+    def _start_auto_check(
+        self,
+        record_urls: list[str],
+        notify_urls: list[str],
+        youtube_channels: list[str],
+        youtube_notify_channels: list[str],
+        twitch_channels: list[str],
+        twitch_notify_channels: list[str],
+    ) -> None:  # 自動監視の開始
         self.auto_check_in_progress = True  # 監視中フラグを設定
         http_timeout = load_setting_value("http_timeout", 20, int)  # HTTPタイムアウト取得
         stream_timeout = load_setting_value("stream_timeout", 60, int)  # ストリームタイムアウト取得
         youtube_api_key = load_setting_value("youtube_api_key", "", str).strip()  # YouTube APIキー取得
-        youtube_channels = self._get_auto_youtube_channels()  # YouTube配信者一覧取得
         twitch_client_id = load_setting_value("twitch_client_id", "", str).strip()  # Twitch Client ID取得
         twitch_client_secret = load_setting_value("twitch_client_secret", "", str).strip()  # Twitch Client Secret取得
-        twitch_channels = self._get_auto_twitch_channels()  # Twitch配信者一覧取得
         self.auto_check_thread = QtCore.QThread()  # 監視スレッドを生成
         self.auto_check_worker = AutoCheckWorker(  # 監視ワーカー生成
             youtube_api_key=youtube_api_key,  # YouTube APIキー指定
             youtube_channels=youtube_channels,  # YouTube配信者指定
+            youtube_notify_channels=youtube_notify_channels,  # YouTube通知のみ指定
             twitch_client_id=twitch_client_id,  # Twitch Client ID指定
             twitch_client_secret=twitch_client_secret,  # Twitch Client Secret指定
             twitch_channels=twitch_channels,  # Twitch配信者指定
-            fallback_urls=urls,  # フォールバックURL指定
+            twitch_notify_channels=twitch_notify_channels,  # Twitch通知のみ指定
+            fallback_urls=record_urls,  # フォールバックURL指定
+            fallback_notify_urls=notify_urls,  # 通知のみURL指定
             http_timeout=int(http_timeout),  # HTTPタイムアウト指定
             stream_timeout=int(stream_timeout),  # ストリームタイムアウト指定
         )  # ワーカー生成終了
@@ -487,7 +654,7 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         self.auto_check_worker.notify_signal.connect(self._show_info)  # 通知ポップアップを接続
         self.auto_check_worker.finished_signal.connect(self._on_auto_check_finished)  # 完了イベント接続
         self.auto_check_thread.start()  # 監視スレッド開始
-    def _on_auto_check_finished(self, live_urls: list[str]) -> None:  # 自動監視完了処理
+    def _on_auto_check_finished(self, live_urls: list[str], notify_urls: list[str]) -> None:  # 自動監視完了処理
         manual_requested = bool(getattr(self, "_manual_auto_record_requested", False))
         if self.auto_paused_by_user:  # 手動停止中の場合
             self._append_log("自動監視: 手動停止中のため録画開始をスキップしました。")  # スキップログ
@@ -501,8 +668,14 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
             self._cleanup_auto_check_thread()  # 自動監視スレッドを後始末
             self.auto_check_in_progress = False  # 監視中フラグを解除
             return  # 録画開始はしない
+        if notify_urls:
+            for url in notify_urls:
+                self._notify_live_detected(url)
         if manual_requested and not live_urls:
-            self._show_info("監視対象の配信が見つかりませんでした。")
+            if notify_urls:
+                self._show_info("通知のみ対象の配信を検知しました。録画は開始しません。")
+            else:
+                self._show_info("監視対象の配信が見つかりませんでした。")
         for url in live_urls:  # ライブURLごとに処理
             self._start_auto_recording(url)  # 自動録画を開始
         self._cleanup_auto_check_thread()  # 監視スレッドを後始末
@@ -537,7 +710,7 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
             normalized_url,  # 配信URL
             channel_label=channel_label,  # 配信者ラベル
         )  # 出力パス生成終了
-        quality = DEFAULT_QUALITY  # 画質は常に最高品質に固定
+        quality = load_setting_value("recording_quality", DEFAULT_RECORDING_QUALITY, str)  # 録画画質を取得
         retry_count = load_setting_value("retry_count", DEFAULT_RETRY_COUNT, int)  # リトライ回数取得
         retry_wait = load_setting_value("retry_wait", DEFAULT_RETRY_WAIT_SEC, int)  # リトライ待機取得
         http_timeout = load_setting_value("http_timeout", 20, int)  # HTTPタイムアウト取得
@@ -631,29 +804,8 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
     def _start_recording(self) -> None:  # 録画開始処理
         url = self.url_input.text().strip()  # URL取得
         if not url:  # URLが空の場合
-            twitcasting_urls = self._get_auto_twitcasting_urls()  # ツイキャスURL一覧を取得
-            niconico_urls = self._get_auto_niconico_urls()  # ニコ生URL一覧を取得
-            tiktok_urls = self._get_auto_tiktok_urls()  # TikTok URL一覧を取得
-            fuwatch_urls = self._get_auto_fuwatch_urls()  # ふわっちURL一覧を取得
-            kick_urls = self._get_auto_kick_urls()  # Kick URL一覧を取得
-            bigo_urls = self._get_auto_bigo_urls()  # BIGO LIVE URL一覧を取得
-            radiko_urls = self._get_auto_radiko_urls()  # radiko URL一覧を取得
-            openrectv_urls = self._get_auto_openrectv_urls()  # OPENREC.tv URL一覧を取得
-            bilibili_urls = self._get_auto_bilibili_urls()  # bilibili URL一覧を取得
-            youtube_channels = self._get_auto_youtube_channels()  # YouTube配信者一覧を取得
-            twitch_channels = self._get_auto_twitch_channels()  # Twitch配信者一覧を取得
-            merged_urls = merge_unique_urls(  # 監視URLを結合
-                twitcasting_urls,  # ツイキャスURL一覧
-                niconico_urls,  # ニコ生URL一覧
-                tiktok_urls,  # TikTok URL一覧
-                fuwatch_urls,  # ふわっちURL一覧
-                kick_urls,  # Kick URL一覧
-                bigo_urls,  # BIGO LIVE URL一覧
-                radiko_urls,  # radiko URL一覧
-                openrectv_urls,  # OPENREC.tv URL一覧
-                bilibili_urls,  # bilibili URL一覧
-            )  # 結合の終了
-            if not (merged_urls or youtube_channels or twitch_channels):  # 対象が無い場合
+            targets = self._collect_auto_monitor_targets()  # 監視対象を取得
+            if not targets.get("has_targets"):  # 対象が無い場合
                 self._show_info("自動録画の監視対象が未設定です。")  # 通知表示
                 return  # 処理中断
             if self.auto_check_in_progress:  # 既に監視中の場合
@@ -665,7 +817,14 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
                 self._refresh_auto_resume_button_state()  # 自動録画再開ボタン状態を更新
             self._manual_auto_record_requested = True
             self._append_log("録画開始: 監視対象の配信を確認します。")  # 開始ログを出力
-            self._start_auto_check(merged_urls)  # すぐに監視を実行
+            self._start_auto_check(
+                targets.get("record_urls", []),
+                targets.get("notify_urls", []),
+                targets.get("youtube_record", []),
+                targets.get("youtube_notify", []),
+                targets.get("twitch_record", []),
+                targets.get("twitch_notify", []),
+            )  # すぐに監視を実行
             return  # 処理中断
         self.manual_recording_url = url  # 手動録画URLを記録
         self.manual_recording_started_at = time.monotonic()
@@ -681,7 +840,7 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         )  # 出力パス生成終了
         self.manual_recording_path = output_path  # 手動録画パスを保存
         self._append_log(f"出力パス: {output_path}")  # ログ出力
-        quality = DEFAULT_QUALITY  # 画質は常に最高品質に固定
+        quality = load_setting_value("recording_quality", DEFAULT_RECORDING_QUALITY, str)  # 録画画質を取得
         retry_count = load_setting_value("retry_count", DEFAULT_RETRY_COUNT, int)  # リトライ回数取得
         retry_wait = load_setting_value("retry_wait", DEFAULT_RETRY_WAIT_SEC, int)  # リトライ待機取得
         http_timeout = load_setting_value("http_timeout", 20, int)  # HTTPタイムアウト取得

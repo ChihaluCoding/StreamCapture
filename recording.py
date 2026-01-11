@@ -13,6 +13,9 @@ from streamlink.exceptions import StreamlinkError  # Streamlink例外
 from config import (  # 定数を読み込み
     DEFAULT_OUTPUT_FORMAT,  # 出力形式の既定値
     DEFAULT_QUALITY,  # 既定の画質指定
+    DEFAULT_RECORDING_MAX_SIZE_MB,  # 録画サイズ上限の既定
+    DEFAULT_RECORDING_SIZE_MARGIN_MB,  # 録画サイズ余裕の既定
+    DEFAULT_AUTO_COMPRESS_MAX_HEIGHT,  # 自動圧縮の最大解像度既定
     FLUSH_INTERVAL_SEC,  # 定期フラッシュ間隔
     OUTPUT_FORMAT_FLV,  # 出力形式: FLV
     OUTPUT_FORMAT_MKV,  # 出力形式: MKV
@@ -31,7 +34,7 @@ from url_utils import (  # URL関連ユーティリティを読み込み
     derive_channel_label,  # 配信者ラベル推定
 )
 from ytdlp_utils import fetch_stream_url_with_ytdlp, is_ytdlp_available  # yt-dlp補助
-from settings_store import load_bool_setting  # 設定読み込み
+from settings_store import load_bool_setting, load_setting_value  # 設定読み込み
 
 def find_ffmpeg_path() -> Optional[str]:  # ffmpegのパスを解決
     env_path = os.environ.get("FFMPEG_PATH", "").strip()  # 環境変数優先
@@ -100,6 +103,25 @@ def build_output_path(input_path: Path, suffix: str) -> Path:  # 出力パス生
 
 def build_mp4_output_path(input_path: Path) -> Path:  # MP4出力パス生成
     return build_output_path(input_path, ".mp4")
+
+def build_compressed_output_path(input_path: Path) -> Path:  # 圧縮後の出力パス生成
+    base = input_path.with_suffix("")  # 拡張子を除いたベース
+    candidate = base.with_name(f"{base.name}_compressed").with_suffix(".mp4")
+    if not candidate.exists():
+        return candidate
+    for index in range(1, 1000):
+        numbered = base.with_name(f"{base.name}_compressed_{index}").with_suffix(".mp4")
+        if not numbered.exists():
+            return numbered
+    return base.with_name(f"{base.name}_compressed_overflow").with_suffix(".mp4")
+
+def build_segment_output_path(base_path: Path, index: int) -> Path:  # 分割録画の出力パス生成
+    if index <= 0:
+        return base_path
+    stem = base_path.with_suffix("").name
+    suffix = base_path.suffix
+    candidate = base_path.with_name(f"{stem}_{index:03d}{suffix}")
+    return ensure_unique_path(candidate)
 
 def delete_source_ts(  # 変換後のTS削除処理
     input_path: Path,  # 入力パス
@@ -431,6 +453,99 @@ def convert_recording(  # 出力形式に合わせた変換
         return convert_to_audio(input_path, ".wav", status_cb=status_cb)
     return convert_to_mp4(input_path, status_cb=status_cb)  # 高品質コピーMP4を実行
 
+def compress_recording(  # 録画後の自動圧縮
+    input_path: Path,  # 入力パス
+    status_cb: Optional[Callable[[str], None]] = None,  # 状態通知コールバック
+) -> Optional[Path]:  # 返り値は出力パス
+    if not input_path.exists():
+        message = f"圧縮対象ファイルが存在しません: {input_path}"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    if input_path.stat().st_size == 0:
+        message = f"圧縮対象ファイルが空です: {input_path}"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    if input_path.suffix.lower() in (".mp3", ".wav"):
+        message = f"音声ファイルは圧縮をスキップします: {input_path}"
+        if status_cb is not None:
+            status_cb(message)
+        return input_path
+    ffmpeg_path = find_ffmpeg_path()
+    if not ffmpeg_path:
+        message = "ffmpegが見つかりません。PATHにffmpegを追加してください。"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    codec = load_setting_value("auto_compress_codec", "libx264", str).strip() or "libx264"
+    preset = load_setting_value("auto_compress_preset", "medium", str).strip() or "medium"
+    max_height = int(load_setting_value("auto_compress_max_height", DEFAULT_AUTO_COMPRESS_MAX_HEIGHT, int))
+    video_bitrate = int(load_setting_value("auto_compress_video_bitrate_kbps", 2500, int))
+    audio_bitrate = int(load_setting_value("auto_compress_audio_bitrate_kbps", 128, int))
+    keep_original = load_bool_setting("auto_compress_keep_original", True)
+    output_path = build_compressed_output_path(input_path)
+    message = f"録画後の自動圧縮を開始します: {output_path}"
+    if status_cb is not None:
+        status_cb(message)
+    command = [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        str(input_path),
+        "-c:v",
+        codec,
+        "-preset",
+        preset,
+        "-b:v",
+        f"{max(1, video_bitrate)}k",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        f"{max(1, audio_bitrate)}k",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
+    if max_height > 0:
+        command.insert(-4, f"scale=-2:min(ih\\,{max_height})")
+        command.insert(-4, "-vf")
+    if codec == "libx265":
+        try:
+            flag_index = command.index("-movflags")
+        except ValueError:
+            flag_index = len(command) - 1
+        command.insert(flag_index, "hvc1")
+        command.insert(flag_index, "-tag:v")
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode != 0:
+        stderr_text = "\n".join(result.stderr.strip().splitlines()[-5:]) if result.stderr else "詳細不明"
+        message = f"録画後の自動圧縮に失敗しました: {stderr_text}"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    message = f"録画後の自動圧縮が完了しました: {output_path}"
+    if status_cb is not None:
+        status_cb(message)
+    if not keep_original:
+        try:
+            input_path.unlink()
+            if status_cb is not None:
+                status_cb(f"元のファイルを削除しました: {input_path}")
+        except OSError as exc:
+            if status_cb is not None:
+                status_cb(f"元のファイル削除に失敗しました: {exc}")
+    return output_path
+
 def select_stream(available_streams: dict, quality: str):  # ストリーム選択
     if quality in available_streams:  # 希望画質が存在する場合
         return available_streams[quality]  # その画質を返却
@@ -499,103 +614,134 @@ def _record_stream_with_ytdlp(  # yt-dlpで録画処理
     output_path: Path,  # 出力パス
     stop_event: Optional[threading.Event],  # 停止フラグ
     status_cb: Optional[Callable[[str], None]],  # 状態通知コールバック
-) -> bool:  # 成否を返却
+) -> list[Path]:  # 出力パス一覧を返却
     if not is_ytdlp_available():  # yt-dlpが無い場合
-        return False  # 何もしない
+        return []  # 何もしない
     stream_url = fetch_stream_url_with_ytdlp(url, status_cb)  # m3u8等のURLを取得
     if not stream_url:  # 取得失敗時
-        return False  # 失敗を返却
+        return []  # 失敗を返却
     ffmpeg_path = find_ffmpeg_path()  # ffmpegを探索
     if not ffmpeg_path:  # ffmpegが無い場合
         if status_cb is not None:  # コールバックが指定されている場合
             status_cb("ffmpegが見つかりません。PATHにffmpegを追加してください。")  # 通知
-        return False  # 失敗を返却
+        return []  # 失敗を返却
     if status_cb is not None:  # コールバックが指定されている場合
         status_cb("yt-dlpの配信URLで録画を試行します。")  # フォールバック通知
-    command = [  # ffmpegコマンド定義
-        ffmpeg_path,  # ffmpeg実行ファイル
-        "-y",  # 上書き
-        "-loglevel",  # ログレベル指定
-        "error",  # エラーのみ表示
-        "-reconnect",  # 再接続有効
-        "1",  # 有効化フラグ
-        "-reconnect_streamed",  # ストリーム再接続
-        "1",  # 有効化フラグ
-        "-reconnect_delay_max",  # 最大待機
-        "5",  # 秒
-        "-i",  # 入力指定
-        stream_url,  # 取得したURL
-        "-c",  # コーデック指定
-        "copy",  # コピー
-        "-f",  # 出力フォーマット指定
-        "mpegts",  # TS出力
-        str(output_path),  # 出力パス
-    ]  # コマンド定義終了
-    process = subprocess.Popen(  # ffmpeg起動
-        command,  # コマンド指定
-        stdout=subprocess.DEVNULL,  # 標準出力は捨てる
-        stderr=subprocess.PIPE,  # エラー出力を取得
-        text=True,  # テキスト取得
-        encoding="utf-8",  # 文字コード指定
-        errors="replace",  # デコード失敗時は置換
-    )
-    stopped = False  # 停止フラグ
-    try:  # 待機処理
-        while process.poll() is None:  # 実行中
-            if should_stop(stop_event):  # 停止要求
-                stopped = True  # 停止扱いにする
-                process.terminate()  # 停止要求を送る
-                try:  # 終了待機
-                    process.wait(timeout=5)  # 少し待機
-                except subprocess.TimeoutExpired:  # 終了しない場合
-                    process.kill()  # 強制終了
-                break  # ループ終了
-            time.sleep(0.2)  # 少し待機
-    finally:  # 後始末
-        try:  # 出力回収
-            _, stderr = process.communicate(timeout=1)  # 出力を回収
-        except subprocess.TimeoutExpired:  # 取り切れない場合
-            process.kill()  # 強制終了
-            _, stderr = process.communicate()  # 出力を回収
-        if process.returncode not in (0, None) and not stopped:  # 失敗時
-            stderr_text = stderr or ""  # エラー全文
-            if "Unrecognized option 'reconnect'" in stderr_text:  # 古いffmpeg向け
-                if status_cb is not None:  # コールバックが指定されている場合
-                    status_cb("ffmpegが-reconnectに未対応のため再試行します。")  # 再試行通知
-                fallback_command = [  # 再試行コマンド
-                    ffmpeg_path,
-                    "-y",
-                    "-loglevel",
-                    "error",
-                    "-i",
-                    stream_url,
-                    "-c",
-                    "copy",
-                    "-f",
-                    "mpegts",
-                    str(output_path),
-                ]
-                retry = subprocess.run(  # 再試行
-                    fallback_command,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    check=False,
-                )
-                if retry.returncode == 0:
-                    return True
-                retry_tail = "\n".join((retry.stderr or "").splitlines()[-5:]) if retry.stderr else "詳細不明"
+    max_mb = int(load_setting_value("recording_max_size_mb", DEFAULT_RECORDING_MAX_SIZE_MB, int))
+    margin_mb = int(load_setting_value("recording_size_margin_mb", DEFAULT_RECORDING_SIZE_MARGIN_MB, int))
+    max_bytes = max_mb * 1024 * 1024 if max_mb > 0 else 0
+    margin_bytes = margin_mb * 1024 * 1024 if margin_mb > 0 else 0
+    threshold = max_bytes - margin_bytes if max_bytes > 0 else 0
+    if max_bytes > 0 and threshold <= 0:
+        threshold = max_bytes
+    segment_paths: list[Path] = []
+    segment_index = 0
+    while True:
+        if should_stop(stop_event):
+            break
+        segment_path = build_segment_output_path(output_path, segment_index)
+        segment_paths.append(segment_path)
+        command = [  # ffmpegコマンド定義
+            ffmpeg_path,  # ffmpeg実行ファイル
+            "-y",  # 上書き
+            "-loglevel",  # ログレベル指定
+            "error",  # エラーのみ表示
+            "-reconnect",  # 再接続有効
+            "1",  # 有効化フラグ
+            "-reconnect_streamed",  # ストリーム再接続
+            "1",  # 有効化フラグ
+            "-reconnect_delay_max",  # 最大待機
+            "5",  # 秒
+            "-i",  # 入力指定
+            stream_url,  # 取得したURL
+            "-c",  # コーデック指定
+            "copy",  # コピー
+            "-f",  # 出力フォーマット指定
+            "mpegts",  # TS出力
+            str(segment_path),  # 出力パス
+        ]  # コマンド定義終了
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        stopped = False
+        rotated = False
+        try:
+            while process.poll() is None:
+                if should_stop(stop_event):
+                    stopped = True
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    break
+                if threshold > 0 and segment_path.exists():
+                    if segment_path.stat().st_size >= threshold:
+                        rotated = True
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                        break
+                time.sleep(0.2)
+        finally:
+            try:
+                _, stderr = process.communicate(timeout=1)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                _, stderr = process.communicate()
+            if process.returncode not in (0, None) and not stopped and not rotated:
+                stderr_text = stderr or ""
+                if "Unrecognized option 'reconnect'" in stderr_text:
+                    if status_cb is not None:
+                        status_cb("ffmpegが-reconnectに未対応のため再試行します。")
+                    fallback_command = [
+                        ffmpeg_path,
+                        "-y",
+                        "-loglevel",
+                        "error",
+                        "-i",
+                        stream_url,
+                        "-c",
+                        "copy",
+                        "-f",
+                        "mpegts",
+                        str(segment_path),
+                    ]
+                    retry = subprocess.run(
+                        fallback_command,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        check=False,
+                    )
+                    if retry.returncode == 0:
+                        return segment_paths
+                    retry_tail = "\n".join((retry.stderr or "").splitlines()[-5:]) if retry.stderr else "詳細不明"
+                    if status_cb is not None:
+                        status_cb(f"yt-dlp経由の録画に失敗しました: {retry_tail}")
+                    return segment_paths
+                tail = "\n".join(stderr_text.splitlines()[-5:]) if stderr_text else "詳細不明"
                 if status_cb is not None:
-                    status_cb(f"yt-dlp経由の録画に失敗しました: {retry_tail}")
-                return False
-            tail = "\n".join(stderr_text.splitlines()[-5:]) if stderr_text else "詳細不明"  # エラー末尾
-            if status_cb is not None:  # コールバックが指定されている場合
-                status_cb(f"yt-dlp経由の録画に失敗しました: {tail}")  # 通知
-            return False  # 失敗
-    if status_cb is not None and stopped:  # 停止で終了した場合
-        status_cb("停止要求を受け付けました。録画を終了します。")  # 停止通知
-    return True  # 成功扱い
+                    status_cb(f"yt-dlp経由の録画に失敗しました: {tail}")
+                return segment_paths
+        if stopped:
+            if status_cb is not None:
+                status_cb("停止要求を受け付けました。録画を終了します。")
+            break
+        if not rotated:
+            break
+        if status_cb is not None:
+            status_cb(f"録画サイズ上限のため分割します: {segment_path}")
+        segment_index += 1
+    return segment_paths
 
 
 def record_stream(  # 録画処理
@@ -607,7 +753,7 @@ def record_stream(  # 録画処理
     retry_wait: int,  # リトライ待機秒
     stop_event: Optional[threading.Event] = None,  # 停止フラグ
     status_cb: Optional[Callable[[str], None]] = None,  # 状態通知コールバック
-):  # 関数定義終了
+) -> list[Path]:  # 関数定義終了
     start_message = f"録画開始: {url}"  # 開始通知メッセージ
     output_message = f"出力先: {output_path}"  # 出力先通知メッセージ
     if status_cb is not None:  # コールバックが指定されている場合
@@ -616,13 +762,23 @@ def record_stream(  # 録画処理
     if "whowatch.tv" in url and is_ytdlp_available():  # ふわっちはyt-dlpで録画
         if status_cb is not None:  # コールバックが指定されている場合
             status_cb("ふわっちはyt-dlpで録画を開始します。")  # 方式通知
-        if not _record_stream_with_ytdlp(url, output_path, stop_event, status_cb):  # yt-dlp録画
-            if status_cb is not None:  # コールバックが指定されている場合
-                status_cb("yt-dlpで録画できませんでした。")  # 失敗通知
-        return  # ふわっちはStreamlinkを使わない
+        segment_paths = _record_stream_with_ytdlp(url, output_path, stop_event, status_cb)
+        if not segment_paths and status_cb is not None:
+            status_cb("yt-dlpで録画できませんでした。")  # 失敗通知
+        return segment_paths  # ふわっちはStreamlinkを使わない
     last_flush_time = time.time()  # 最終フラッシュ時刻
     total_written = 0  # 総書き込みバイト数を初期化
     output_file = None  # 出力ファイル参照
+    segment_paths: list[Path] = []
+    segment_index = 0
+    segment_written = 0
+    max_mb = int(load_setting_value("recording_max_size_mb", DEFAULT_RECORDING_MAX_SIZE_MB, int))
+    margin_mb = int(load_setting_value("recording_size_margin_mb", DEFAULT_RECORDING_SIZE_MARGIN_MB, int))
+    max_bytes = max_mb * 1024 * 1024 if max_mb > 0 else 0
+    margin_bytes = margin_mb * 1024 * 1024 if margin_mb > 0 else 0
+    threshold = max_bytes - margin_bytes if max_bytes > 0 else 0
+    if max_bytes > 0 and threshold <= 0:
+        threshold = max_bytes
     try:  # 録画処理
         while True:  # 録画ループ
             if should_stop(stop_event):  # 停止要求の確認
@@ -646,13 +802,17 @@ def record_stream(  # 録画処理
                     status_cb(message)  # 状態通知
                 if status_cb is not None:  # コールバックが指定されている場合
                     status_cb("Streamlinkが失敗したためyt-dlpで録画を試行します。")  # フォールバック通知
-                if _record_stream_with_ytdlp(url, output_path, stop_event, status_cb):  # yt-dlpへ切替
-                    return  # ffmpeg録画に任せて終了
+                fallback_segments = _record_stream_with_ytdlp(url, output_path, stop_event, status_cb)
+                if fallback_segments:  # yt-dlpへ切替
+                    return fallback_segments  # ffmpeg録画に任せて終了
                 break  # 録画ループを終了
             if stream is None:  # 停止によりストリームが取得できない場合
                 break  # 録画ループを終了
             if output_file is None:  # 出力ファイルが未作成の場合
-                output_file = output_path.open("ab", buffering=READ_CHUNK_SIZE)  # 出力ファイルを開く
+                segment_path = build_segment_output_path(output_path, segment_index)
+                output_file = segment_path.open("ab", buffering=READ_CHUNK_SIZE)  # 出力ファイルを開く
+                segment_paths.append(segment_path)
+                segment_written = 0
             stream_fd = None  # ストリームファイルを初期化
             stream_ended = False  # 配信終了フラグ
             try:  # 例外処理開始
@@ -682,8 +842,20 @@ def record_stream(  # 録画処理
                                 status_cb(message)  # 状態通知
                             stream_ended = True  # 終了フラグを設定
                         break  # 内側ループを抜ける
+                    if threshold > 0 and (segment_written + len(data)) > threshold and segment_written > 0:
+                        output_file.flush()
+                        output_file.close()
+                        if status_cb is not None:
+                            status_cb(f"録画サイズ上限のため分割します: {segment_paths[-1]}")
+                        output_file = None
+                        segment_index += 1
+                        segment_written = 0
+                        segment_path = build_segment_output_path(output_path, segment_index)
+                        output_file = segment_path.open("ab", buffering=READ_CHUNK_SIZE)
+                        segment_paths.append(segment_path)
                     output_file.write(data)  # ファイルへ書き込み
                     total_written += len(data)  # 書き込みバイト数を加算
+                    segment_written += len(data)
                     now = time.time()  # 現在時刻を取得
                     if now - last_flush_time >= FLUSH_INTERVAL_SEC:  # フラッシュ条件
                         output_file.flush()  # 出力をフラッシュ
@@ -700,3 +872,4 @@ def record_stream(  # 録画処理
     finally:  # 後始末
         if output_file is not None:  # 出力ファイルがある場合
             output_file.close()  # 出力ファイルを閉じる
+    return segment_paths

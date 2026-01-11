@@ -1,16 +1,17 @@
-配信サイトのライブストリーミングを簡単に録画できるソフトウェアです。
+配信サイトの配信を簡単に録画できるソフトウェアです。
 
 ## 対応プラットフォーム
 - Twitch
-- YouTube Live
-- TikTok Live
+- YouTube
 - ツイキャス
 - ニコニコ生放送
+#### 以下のプラットフォームはPRO版のみ対応 （一部のみ順次開放予定）
+- TikTok
 - Kick
-- AbemaTV
+- AbemaTV　
 - radiko
 - OPENREC
-- Bilibili
+- BiliBili
 - 17LIVE
 - ふわっち
 

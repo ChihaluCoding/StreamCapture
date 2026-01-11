@@ -11,6 +11,9 @@ from config import (
     DEFAULT_KICK_ENTRIES, DEFAULT_NICONICO_ENTRIES, DEFAULT_OPENRECTV_ENTRIES,
     DEFAULT_OUTPUT_FORMAT, DEFAULT_RADIKO_ENTRIES, DEFAULT_RETRY_COUNT,
     DEFAULT_RETRY_WAIT_SEC, DEFAULT_TIKTOK_ENTRIES, DEFAULT_TWITCASTING_ENTRIES,
+    DEFAULT_RECORDING_QUALITY,
+    DEFAULT_RECORDING_MAX_SIZE_MB, DEFAULT_RECORDING_SIZE_MARGIN_MB,
+    DEFAULT_AUTO_COMPRESS_MAX_HEIGHT,
     OUTPUT_FORMAT_FLV, OUTPUT_FORMAT_MKV, OUTPUT_FORMAT_MOV, OUTPUT_FORMAT_MP3,
     OUTPUT_FORMAT_MP4_COPY, OUTPUT_FORMAT_MP4_LIGHT, OUTPUT_FORMAT_TS, OUTPUT_FORMAT_WAV,
 )
@@ -43,6 +46,13 @@ class ToggleSwitch(QtWidgets.QWidget):
         self._anim.setStartValue(self._pos_progress)
         self._anim.setEndValue(1.0 if checked else 0.0)
         self._anim.start()
+    def setCheckedImmediate(self, checked: bool) -> None:
+        if self._checked == checked:
+            return
+        self._checked = checked
+        self._anim.stop()
+        self._pos_progress = 1.0 if checked else 0.0
+        self.update()
     def toggle(self) -> None: self.setChecked(not self.isChecked())
     def sizeHint(self) -> QtCore.QSize: return QtCore.QSize(48, 26)
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
@@ -203,7 +213,11 @@ class SettingsDialog(QtWidgets.QDialog):
         self.resize(950, 700)
         self._apply_global_style()
         self._init_ui()
-        self._load_settings()
+        self._suppress_gdrive_confirm = True
+        try:
+            self._load_settings()
+        finally:
+            self._suppress_gdrive_confirm = False
 
     def _is_dark_mode(self) -> bool:
         palette = QtGui.QGuiApplication.palette()
@@ -709,6 +723,72 @@ class SettingsDialog(QtWidgets.QDialog):
         self.keep_ts_input = ToggleSwitch()
         self._add_card(layout, "TSファイルを残す", self.keep_ts_input, "MP4保存時でも元のTSファイルを残します。")
 
+        self.recording_max_size_input = ModernSpinBox('int')
+        self.recording_max_size_input.setRange(0, 1024 * 1024)
+        self._add_card(layout, "録画ファイルの最大サイズ (MB)", self.recording_max_size_input, "0にすると無制限になります。")
+
+        self.recording_size_margin_input = ModernSpinBox('int')
+        self.recording_size_margin_input.setRange(0, 1024 * 1024)
+        self._add_card(layout, "録画サイズ切替の余裕 (MB)", self.recording_size_margin_input, "上限に達する前に切り替える余裕幅です。")
+
+        self.auto_compress_enabled_input = ToggleSwitch()
+        self.auto_compress_enabled_input.toggled.connect(self._update_auto_compress_option_state)
+        self._add_card(layout, "録画後に自動圧縮", self.auto_compress_enabled_input, "録画後に再エンコードして容量を削減します。")
+
+        self.auto_compress_codec_input = QtWidgets.QComboBox()
+        self.auto_compress_codec_input.addItems([
+            "H.264 (libx264)",
+            "H.265 (libx265)",
+        ])
+        self.auto_compress_codec_input.setItemData(0, "libx264")
+        self.auto_compress_codec_input.setItemData(1, "libx265")
+        self._add_input_card(layout, "圧縮コーデック", self.auto_compress_codec_input, "互換性重視はH.264がおすすめです。")
+
+        self.auto_compress_preset_input = QtWidgets.QComboBox()
+        self.auto_compress_preset_input.addItems([
+            "速い (fast)",
+            "標準 (medium)",
+            "高圧縮 (slow)",
+        ])
+        self.auto_compress_preset_input.setItemData(0, "fast")
+        self.auto_compress_preset_input.setItemData(1, "medium")
+        self.auto_compress_preset_input.setItemData(2, "slow")
+        self._add_input_card(layout, "圧縮プリセット", self.auto_compress_preset_input, "速いほど処理が軽くなります。")
+
+        self.auto_compress_resolution_input = QtWidgets.QComboBox()
+        self.auto_compress_resolution_input.addItems([
+            "元の解像度を維持",
+            "144p",
+            "240p",
+            "360p",
+            "480p",
+            "720p",
+            "1080p",
+            "1444p",
+            "2160p",
+        ])
+        self.auto_compress_resolution_input.setItemData(0, 0)
+        self.auto_compress_resolution_input.setItemData(1, 144)
+        self.auto_compress_resolution_input.setItemData(2, 240)
+        self.auto_compress_resolution_input.setItemData(3, 360)
+        self.auto_compress_resolution_input.setItemData(4, 480)
+        self.auto_compress_resolution_input.setItemData(5, 720)
+        self.auto_compress_resolution_input.setItemData(6, 1080)
+        self.auto_compress_resolution_input.setItemData(7, 1444)
+        self.auto_compress_resolution_input.setItemData(8, 2160)
+        self._add_input_card(layout, "圧縮の最大解像度", self.auto_compress_resolution_input, "元の解像度より高い値は適用されません。")
+
+        self.auto_compress_video_bitrate_input = ModernSpinBox('int')
+        self.auto_compress_video_bitrate_input.setRange(100, 50000)
+        self._add_card(layout, "圧縮の映像ビットレート (kbps)", self.auto_compress_video_bitrate_input, "数値が小さいほど容量が減ります。")
+
+        self.auto_compress_audio_bitrate_input = ModernSpinBox('int')
+        self.auto_compress_audio_bitrate_input.setRange(32, 320)
+        self._add_card(layout, "圧縮の音声ビットレート (kbps)", self.auto_compress_audio_bitrate_input, "音声の圧縮率を指定します。")
+
+        self.auto_compress_keep_original_input = ToggleSwitch()
+        self._add_card(layout, "圧縮前のファイルを残す", self.auto_compress_keep_original_input, "ONにすると元の録画ファイルを保持します。")
+
         layout.addStretch(1)
         return page
 
@@ -731,6 +811,25 @@ class SettingsDialog(QtWidgets.QDialog):
         self.stream_timeout_input.setRange(1, 600)
         self._add_card(layout, "ストリーム待機 (秒)", self.stream_timeout_input, "映像データが途切れた際の待機時間")
 
+        self.recording_quality_input = QtWidgets.QComboBox()
+        self.recording_quality_input.addItems([
+            "最高 (best)",
+            "1080p",
+            "720p",
+            "480p",
+            "360p",
+            "最低 (worst)",
+            "音声のみ (audio_only)",
+        ])
+        self.recording_quality_input.setItemData(0, "best")
+        self.recording_quality_input.setItemData(1, "1080p")
+        self.recording_quality_input.setItemData(2, "720p")
+        self.recording_quality_input.setItemData(3, "480p")
+        self.recording_quality_input.setItemData(4, "360p")
+        self.recording_quality_input.setItemData(5, "worst")
+        self.recording_quality_input.setItemData(6, "audio_only")
+        self._add_input_card(layout, "録画画質", self.recording_quality_input, "Streamlinkで取得する画質を選択します。")
+
         layout.addStretch(1)
         return page
 
@@ -743,6 +842,9 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self.auto_startup_input = ToggleSwitch()
         self._add_card(layout, "アプリ起動時に監視開始", self.auto_startup_input, "アプリを起動した直後から監視をスタートします。")
+
+        self.auto_notify_only_input = ToggleSwitch()
+        self._add_card(layout, "通知のみで監視", self.auto_notify_only_input, "配信を検知しても録画せず、通知だけを行います。")
 
         self.auto_check_interval_input = ModernSpinBox('int')
         self.auto_check_interval_input.setRange(20, 3600)
@@ -790,6 +892,10 @@ class SettingsDialog(QtWidgets.QDialog):
             layout.addWidget(container)
             return text_area
 
+        self.auto_notify_only_entries_input = add_collapsible_text_area(
+            "通知のみ対象",
+            "URL/ID/チャンネルを1行ずつ（監視リストに含めたもののみ有効）",
+        )
         self.youtube_channels_input = add_collapsible_text_area("YouTube", "例: https://www.youtube.com/@channel")
         self.twitch_channels_input = add_collapsible_text_area("Twitch", "例: https://www.twitch.tv/shaka")
         self.twitcasting_input = add_collapsible_text_area("ツイキャス", "ID または URL")
@@ -849,6 +955,7 @@ class SettingsDialog(QtWidgets.QDialog):
         page, layout = self._make_scrollable_page("Google Drive連携")
 
         self.gdrive_enabled_input = ToggleSwitch()
+        self.gdrive_enabled_input.installEventFilter(self)
         self._add_card(layout, "Google Driveへ自動アップロード", self.gdrive_enabled_input, "録画完了後にGoogle Driveへアップロードします。")
 
         self.gdrive_credentials_input = QtWidgets.QLineEdit()
@@ -894,6 +1001,27 @@ class SettingsDialog(QtWidgets.QDialog):
         self.stream_timeout_input.setValue(load_setting_value("stream_timeout", 60, int))
         self.preview_volume_input.setValue(load_setting_value("preview_volume", 0.5, float))
         self.keep_ts_input.setChecked(load_bool_setting("keep_ts_file", False))
+        self.recording_max_size_input.setValue(load_setting_value("recording_max_size_mb", DEFAULT_RECORDING_MAX_SIZE_MB, int))
+        self.recording_size_margin_input.setValue(load_setting_value("recording_size_margin_mb", DEFAULT_RECORDING_SIZE_MARGIN_MB, int))
+        self.auto_compress_enabled_input.setChecked(load_bool_setting("auto_compress_enabled", False))
+        codec = load_setting_value("auto_compress_codec", "libx264", str).lower()
+        codec_index = self.auto_compress_codec_input.findData(codec)
+        if codec_index < 0:
+            codec_index = 0
+        self.auto_compress_codec_input.setCurrentIndex(codec_index)
+        preset = load_setting_value("auto_compress_preset", "medium", str).lower()
+        preset_index = self.auto_compress_preset_input.findData(preset)
+        if preset_index < 0:
+            preset_index = 1
+        self.auto_compress_preset_input.setCurrentIndex(preset_index)
+        max_height = load_setting_value("auto_compress_max_height", DEFAULT_AUTO_COMPRESS_MAX_HEIGHT, int)
+        height_index = self.auto_compress_resolution_input.findData(max_height)
+        if height_index < 0:
+            height_index = 0
+        self.auto_compress_resolution_input.setCurrentIndex(height_index)
+        self.auto_compress_video_bitrate_input.setValue(load_setting_value("auto_compress_video_bitrate_kbps", 2500, int))
+        self.auto_compress_audio_bitrate_input.setValue(load_setting_value("auto_compress_audio_bitrate_kbps", 128, int))
+        self.auto_compress_keep_original_input.setChecked(load_bool_setting("auto_compress_keep_original", True))
         self.timeshift_segment_hours_input.setValue(
             load_setting_value("timeshift_segment_hours", DEFAULT_TIMESHIFT_SEGMENT_HOURS, int)
         )
@@ -909,6 +1037,7 @@ class SettingsDialog(QtWidgets.QDialog):
         
         self.auto_enabled_input.setChecked(load_bool_setting("auto_enabled", DEFAULT_AUTO_ENABLED))
         self.auto_startup_input.setChecked(load_bool_setting("auto_startup_recording", True))
+        self.auto_notify_only_input.setChecked(load_bool_setting("auto_notify_only", False))
         self.auto_check_interval_input.setValue(load_setting_value("auto_check_interval", DEFAULT_AUTO_CHECK_INTERVAL_SEC, int))
         self._update_auto_record_option_state(bool(self.auto_enabled_input.isChecked()))
 
@@ -925,6 +1054,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.openrectv_input.setPlainText(load_setting_value("openrectv_entries", DEFAULT_OPENRECTV_ENTRIES, str))
         self.bilibili_input.setPlainText(load_setting_value("bilibili_entries", DEFAULT_BILIBILI_ENTRIES, str))
         self.abema_input.setPlainText(load_setting_value("abema_entries", DEFAULT_ABEMA_ENTRIES, str))
+        self.auto_notify_only_entries_input.setPlainText(load_setting_value("auto_notify_only_entries", "", str))
         
         self.youtube_api_key_input.setText(load_setting_value("youtube_api_key", "", str))
         self.youtube_channels_input.setPlainText(load_setting_value("youtube_channels", "", str))
@@ -932,6 +1062,12 @@ class SettingsDialog(QtWidgets.QDialog):
         self.twitch_client_id_input.setText(load_setting_value("twitch_client_id", "", str))
         self.twitch_client_secret_input.setText(load_setting_value("twitch_client_secret", "", str))
         self.twitch_channels_input.setPlainText(load_setting_value("twitch_channels", "", str))
+        quality = load_setting_value("recording_quality", DEFAULT_RECORDING_QUALITY, str)
+        quality_index = self.recording_quality_input.findData(quality)
+        if quality_index < 0:
+            quality_index = self.recording_quality_input.findData(DEFAULT_RECORDING_QUALITY)
+        self.recording_quality_input.setCurrentIndex(max(0, quality_index))
+        self._update_auto_compress_option_state(bool(self.auto_compress_enabled_input.isChecked()))
 
     def _save_settings(self) -> None:
         save_setting_value("output_dir", self.output_dir_input.text().strip())
@@ -947,6 +1083,15 @@ class SettingsDialog(QtWidgets.QDialog):
         save_setting_value("stream_timeout", int(self.stream_timeout_input.value()))
         save_setting_value("preview_volume", float(self.preview_volume_input.value()))
         save_setting_value("keep_ts_file", int(self.keep_ts_input.isChecked()))
+        save_setting_value("recording_max_size_mb", int(self.recording_max_size_input.value()))
+        save_setting_value("recording_size_margin_mb", int(self.recording_size_margin_input.value()))
+        save_setting_value("auto_compress_enabled", int(self.auto_compress_enabled_input.isChecked()))
+        save_setting_value("auto_compress_codec", str(self.auto_compress_codec_input.currentData()))
+        save_setting_value("auto_compress_preset", str(self.auto_compress_preset_input.currentData()))
+        save_setting_value("auto_compress_max_height", int(self.auto_compress_resolution_input.currentData()))
+        save_setting_value("auto_compress_video_bitrate_kbps", int(self.auto_compress_video_bitrate_input.value()))
+        save_setting_value("auto_compress_audio_bitrate_kbps", int(self.auto_compress_audio_bitrate_input.value()))
+        save_setting_value("auto_compress_keep_original", int(self.auto_compress_keep_original_input.isChecked()))
         save_setting_value("timeshift_segment_hours", int(self.timeshift_segment_hours_input.value()))
         save_setting_value("timeshift_segment_minutes", int(self.timeshift_segment_minutes_input.value()))
         save_setting_value("timeshift_segment_seconds", int(self.timeshift_segment_seconds_input.value()))
@@ -956,6 +1101,7 @@ class SettingsDialog(QtWidgets.QDialog):
         
         save_setting_value("auto_enabled", int(self.auto_enabled_input.isChecked()))
         save_setting_value("auto_startup_recording", int(self.auto_startup_input.isChecked()))
+        save_setting_value("auto_notify_only", int(self.auto_notify_only_input.isChecked()))
         save_setting_value("auto_check_interval", int(self.auto_check_interval_input.value()))
         
         save_setting_value("log_panel_visible", int(self.log_panel_visible_input.isChecked()))
@@ -971,6 +1117,7 @@ class SettingsDialog(QtWidgets.QDialog):
         save_setting_value("openrectv_entries", self.openrectv_input.toPlainText().strip())
         save_setting_value("bilibili_entries", self.bilibili_input.toPlainText().strip())
         save_setting_value("abema_entries", self.abema_input.toPlainText().strip())
+        save_setting_value("auto_notify_only_entries", self.auto_notify_only_entries_input.toPlainText().strip())
         
         save_setting_value("youtube_api_key", self.youtube_api_key_input.text().strip())
         save_setting_value("youtube_channels", self.youtube_channels_input.toPlainText().strip())
@@ -978,6 +1125,7 @@ class SettingsDialog(QtWidgets.QDialog):
         save_setting_value("twitch_client_id", self.twitch_client_id_input.text().strip())
         save_setting_value("twitch_client_secret", self.twitch_client_secret_input.text().strip())
         save_setting_value("twitch_channels", self.twitch_channels_input.toPlainText().strip())
+        save_setting_value("recording_quality", str(self.recording_quality_input.currentData()))
         parent = self.parent()
         if parent is not None:
             if hasattr(parent, "_load_settings_to_ui"):
@@ -1009,3 +1157,54 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _update_auto_record_option_state(self, enabled: bool) -> None:
         self.auto_startup_input.setEnabled(True)
+
+    def _update_auto_compress_option_state(self, enabled: bool) -> None:
+        widgets = [
+            self.auto_compress_codec_input,
+            self.auto_compress_preset_input,
+            self.auto_compress_resolution_input,
+            self.auto_compress_video_bitrate_input,
+            self.auto_compress_audio_bitrate_input,
+            self.auto_compress_keep_original_input,
+        ]
+        for widget in widgets:
+            widget.setEnabled(True)
+
+    def _confirm_gdrive_enable(self) -> bool:
+        if getattr(self, "_suppress_gdrive_confirm", False):
+            return True
+        message = (
+            "この設定は録画時間が長いほど、Google APIのクエリを大量に消費する可能性があります。\n"
+            "それでもオンにしますか？"
+        )
+        result = QtWidgets.QMessageBox.question(
+            self,
+            "確認",
+            message,
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        return result == QtWidgets.QMessageBox.StandardButton.Yes
+
+    def _show_gdrive_login_notice(self) -> None:
+        message = (
+            "ONにすると、初回のみGoogleアカウントでのログインが求められます。\n"
+            "これはGoogle Driveへアップロードするための認証であり、ログイン情報が漏れることはありません。"
+        )
+        QtWidgets.QMessageBox.information(self, "確認", message, QtWidgets.QMessageBox.StandardButton.Ok)
+
+    def _handle_gdrive_enable_request(self) -> None:
+        if not self._confirm_gdrive_enable():
+            return
+        self._show_gdrive_login_notice()
+        blocker = QtCore.QSignalBlocker(self.gdrive_enabled_input)
+        self.gdrive_enabled_input.setCheckedImmediate(True)
+        del blocker
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if obj is getattr(self, "gdrive_enabled_input", None):
+            if event.type() == QtCore.QEvent.Type.MouseButtonPress:
+                if not self.gdrive_enabled_input.isChecked():
+                    self._handle_gdrive_enable_request()
+                    return True
+        return super().eventFilter(obj, event)
