@@ -8,6 +8,13 @@ import hashlib
 from pathlib import Path
 from typing import Optional
 from PyQt6 import QtCore, QtGui, QtMultimedia, QtMultimediaWidgets, QtWidgets
+from theme_utils import (
+    adjust_color,
+    blend_colors,
+    get_ui_color_overrides,
+    get_ui_font_css_family,
+    is_custom_ui_colors_enabled,
+)
 from streamlink import Streamlink
 from streamlink.exceptions import StreamlinkError
 from config import (
@@ -188,11 +195,30 @@ class TimeShiftWindow(QtWidgets.QDialog):
             list_item_bg = "#ffffff"
             list_item_border = "#e2e8f0"
             list_item_selected = "#e0f2fe"
+        if is_custom_ui_colors_enabled():
+            overrides = get_ui_color_overrides("dark" if is_dark else "light")
+            if overrides:
+                dialog_bg = overrides.get("main_bg", dialog_bg)
+                panel_bg = overrides.get("side_bg", panel_bg)
+                base_text = overrides.get("text", base_text)
+                control_border = overrides.get("border", control_border)
+                primary = overrides.get("primary", primary)
+                primary_hover = adjust_color(primary, 0.9 if not is_dark else 1.1)
+                muted_text = blend_colors(base_text, dialog_bg, 0.6)
+                control_bg = adjust_color(dialog_bg, 1.05 if is_dark else 0.98)
+                ghost_bg = adjust_color(control_bg, 1.02 if is_dark else 0.98)
+                ghost_hover = adjust_color(control_bg, 1.08 if is_dark else 0.96)
+                input_bg = adjust_color(dialog_bg, 1.06 if is_dark else 0.99)
+                input_border = control_border
+                list_bg = dialog_bg
+                list_item_bg = adjust_color(dialog_bg, 1.04 if is_dark else 1.0)
+                list_item_border = control_border
+                list_item_selected = adjust_color(panel_bg, 1.08 if is_dark else 0.95)
         self.setStyleSheet(f"""
             QDialog {{
                 background-color: {dialog_bg};
                 color: {base_text};
-                font-family: "Yu Gothic UI", "Segoe UI", sans-serif;
+                font-family: {get_ui_font_css_family(["Yu Gothic UI", "Segoe UI", "sans-serif"])};
             }}
             QFrame#ControlBar {{
                 background-color: {control_bg};

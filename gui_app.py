@@ -5,6 +5,7 @@ import sys  # アプリ終了コード
 from pathlib import Path  # パス操作
 from typing import Iterable  # 型ヒント補助
 from PyQt6 import QtCore, QtGui, QtWidgets  # PyQt6のGUI基盤
+from theme_utils import get_ui_font_family, load_ui_font_files, register_ui_font_files
 from ui_app import MainWindow  # メインウィンドウを読み込み
 
 class _FilteredStderr:  # 標準エラーのフィルタクラス
@@ -51,6 +52,12 @@ def main() -> int:  # エントリポイント
     )  # ログ抑制設定の終了
     _install_stderr_filter()  # stderrの警告を抑制
     app = QtWidgets.QApplication(sys.argv)  # アプリケーション生成
+    font_files = load_ui_font_files()
+    if font_files:
+        register_ui_font_files(font_files)
+    font_family = get_ui_font_family().strip()
+    if font_family:
+        app.setFont(QtGui.QFont(font_family))
     app.setApplicationName("はいろく！")  # アプリ名設定
     app.setWindowIcon(QtGui.QIcon(str(Path(__file__).resolve().with_name("icon.png"))))  # アプリ全体のアイコン
     app.setQuitOnLastWindowClosed(False)  # タスクトレイ常駐に備えて終了を抑制

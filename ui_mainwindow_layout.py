@@ -1,6 +1,13 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 from PyQt6 import QtCore, QtGui, QtWidgets
+from theme_utils import (
+    adjust_color,
+    blend_colors,
+    get_ui_color_overrides,
+    get_ui_font_css_family,
+    is_custom_ui_colors_enabled,
+)
 
 class MainWindowLayoutMixin:
     def _build_ui(self) -> None:
@@ -233,7 +240,35 @@ class MainWindowLayoutMixin:
             c_log_bg = "#ffffff"
             c_log_text = "#1e293b"
 
-        font_main = '"Noto Sans JP", "Meiryo UI", "Meiryo", "Segoe UI", sans-serif'  # 日本語表示に最適化したフォント
+        def tone(color: str, light_factor: float, dark_factor: float) -> str:
+            return adjust_color(color, dark_factor if is_dark else light_factor)
+
+        if is_custom_ui_colors_enabled():
+            overrides = get_ui_color_overrides("dark" if is_dark else "light")
+            if overrides:
+                c_main_bg = overrides.get("main_bg", c_main_bg)
+                c_side_bg = overrides.get("side_bg", c_side_bg)
+                c_text = overrides.get("text", c_text)
+                c_primary = overrides.get("primary", c_primary)
+                c_border = overrides.get("border", c_border)
+
+                c_text_muted = blend_colors(c_text, c_main_bg, 0.5)
+                c_primary_hover = tone(c_primary, 0.92, 1.08)
+                c_primary_pressed = tone(c_primary, 0.84, 1.16)
+                c_secondary_bg = tone(c_main_bg, 0.98, 1.06)
+                c_secondary_hover_bg = tone(c_secondary_bg, 0.96, 1.1)
+                c_status_hover_bg = tone(c_main_bg, 0.96, 1.1)
+                c_monitor_bg = tone(c_side_bg, 0.98, 1.06)
+                c_section_bg = tone(c_main_bg, 0.99, 1.05)
+                c_tab_bg = tone(c_main_bg, 0.99, 1.06)
+                c_tab_selected_bg = tone(c_main_bg, 1.0, 1.1)
+                c_tab_hover_bg = tone(c_main_bg, 0.96, 1.12)
+                c_input_bg = tone(c_main_bg, 0.99, 1.08)
+                c_input_focus_bg = tone(c_main_bg, 1.0, 1.12)
+                c_log_bg = tone(c_main_bg, 1.0, 1.08)
+                c_log_text = c_text
+
+        font_main = get_ui_font_css_family(["Noto Sans JP", "Meiryo UI", "Meiryo", "Segoe UI", "sans-serif"])
         font_mono = '"Consolas", "Monaco", monospace'  # 等幅フォントは既存を維持
 
         self.setStyleSheet(f"""
