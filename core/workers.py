@@ -10,6 +10,8 @@ from apis.api_youtube import fetch_youtube_live_urls_with_fallback  # YouTube AP
 from utils.platform_utils import normalize_twitch_login  # Twitch入力の正規化
 from core.recording import (
     OUTPUT_FORMAT_TS,
+    OUTPUT_FORMAT_MP3,
+    OUTPUT_FORMAT_WAV,
     convert_recording,
     compress_recording,
     normalize_output_format,
@@ -26,6 +28,7 @@ from utils.settings_store import load_bool_setting, load_setting_value  # 設定
 class RecorderWorker(QtCore.QObject):  # 録画ワーカー定義
     log_signal = QtCore.pyqtSignal(str)  # ログ通知シグナル
     conversion_started = QtCore.pyqtSignal(str)  # 変換開始通知シグナル
+    watermark_started = QtCore.pyqtSignal(str)  # 透かし合成開始通知シグナル
     compression_started = QtCore.pyqtSignal(str)  # 圧縮開始通知シグナル
     compression_finished = QtCore.pyqtSignal(str)  # 圧縮終了通知シグナル
     finished_signal = QtCore.pyqtSignal(int)  # 終了通知シグナル
@@ -82,7 +85,16 @@ class RecorderWorker(QtCore.QObject):  # 録画ワーカー定義
         if normalized_format == OUTPUT_FORMAT_TS:
             converted_paths = list(segment_paths)
         else:
+            watermark_enabled = load_bool_setting("watermark_enabled", False)
+            watermark_mode = load_setting_value("watermark_mode", "image", str).strip().lower() or "image"
+            watermark_path = load_setting_value("watermark_path", "", str).strip()
+            watermark_text = load_setting_value("watermark_text", "", str).strip()
             for segment_path in segment_paths:
+                if watermark_enabled and normalized_format not in (OUTPUT_FORMAT_MP3, OUTPUT_FORMAT_WAV):
+                    if watermark_mode == "text" and watermark_text:
+                        self.watermark_started.emit(self.url)
+                    elif watermark_mode != "text" and watermark_path:
+                        self.watermark_started.emit(self.url)
                 converted_path = convert_recording(
                     segment_path,
                     normalized_format,

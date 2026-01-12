@@ -43,10 +43,6 @@ class MainWindowLayoutMixin:
         url_layout.setContentsMargins(0, 0, 0, 0)
         url_layout.setSpacing(8)
         
-        url_label = QtWidgets.QLabel("配信URL")  # ラベルを日本語化
-        url_label.setObjectName("FieldLabel")
-        url_layout.addWidget(url_label)
-
         self.url_input = QtWidgets.QLineEdit()
         self.url_input.setPlaceholderText("URLを入力...")
         self.url_input.setObjectName("UrlInput")
@@ -107,11 +103,6 @@ class MainWindowLayoutMixin:
         self.timeshift_button.setEnabled(False)
         self.timeshift_button.clicked.connect(self._open_timeshift_window)
         sub_layout.addWidget(self.timeshift_button)
-
-        version_label = QtWidgets.QLabel("v1.0.0 beta")
-        version_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
-        version_label.setStyleSheet("font-weight: normal; color: #94a3b8;")
-        sub_layout.addWidget(version_label)
 
         sidebar_layout.addLayout(sub_layout)
 

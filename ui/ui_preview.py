@@ -424,11 +424,6 @@ class TimeShiftWindow(QtWidgets.QDialog):
         clip_title.setObjectName("SectionTitle")
         clip_layout.addWidget(clip_title)
 
-        version_label = QtWidgets.QLabel("v1.0.0 beta")
-        version_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
-        version_label.setStyleSheet("font-weight: normal;")
-        clip_layout.addWidget(version_label)
-
         clip_row = QtWidgets.QHBoxLayout()
         clip_row.setSpacing(10)
 

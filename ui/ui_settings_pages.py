@@ -469,6 +469,15 @@ class SettingsPagesMixin:
         self.auto_compress_keep_original_input = ToggleSwitch()
         self._add_card(layout, "圧縮前のファイルを残す", self.auto_compress_keep_original_input, "ONにすると元の録画ファイルを保持します。")
 
+        self._add_section_label(layout, "透かし")
+        self.watermark_enabled_input = ToggleSwitch()
+        self._add_card(layout, "透かしを付ける", self.watermark_enabled_input, "録画ファイルに透かしを右下へ合成します。")
+
+        self.watermark_open_dialog_button = QtWidgets.QPushButton("透かし設定を開く")
+        self.watermark_open_dialog_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.watermark_open_dialog_button.clicked.connect(self._open_watermark_dialog)
+        self._add_input_card(layout, "透かし詳細", self.watermark_open_dialog_button, "プレビュー付きの専用ウィンドウを開きます。")
+
         layout.addStretch(1)
         return page
 
@@ -617,4 +626,3 @@ class SettingsPagesMixin:
         self._add_input_card(layout, "Twitch Client Secret", self.twitch_client_secret_input)
         layout.addStretch(1)
         return page
-

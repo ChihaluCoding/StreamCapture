@@ -40,6 +40,7 @@ from utils.theme_utils import (
     register_ui_font_files,
     serialize_ui_colors,
 )
+from ui.ui_watermark_dialog import WatermarkDialog
 
 
 class SettingsIOMixin:
@@ -342,6 +343,7 @@ class SettingsIOMixin:
         self.auto_compress_video_bitrate_input.setValue(load_setting_value("auto_compress_video_bitrate_kbps", 2500, int))
         self.auto_compress_audio_bitrate_input.setValue(load_setting_value("auto_compress_audio_bitrate_kbps", 128, int))
         self.auto_compress_keep_original_input.setChecked(load_bool_setting("auto_compress_keep_original", True))
+        self.watermark_enabled_input.setChecked(load_bool_setting("watermark_enabled", False))
         self.timeshift_segment_hours_input.setValue(
             load_setting_value("timeshift_segment_hours", DEFAULT_TIMESHIFT_SEGMENT_HOURS, int)
         )
@@ -434,6 +436,7 @@ class SettingsIOMixin:
         save_setting_value("auto_compress_video_bitrate_kbps", int(self.auto_compress_video_bitrate_input.value()))
         save_setting_value("auto_compress_audio_bitrate_kbps", int(self.auto_compress_audio_bitrate_input.value()))
         save_setting_value("auto_compress_keep_original", int(self.auto_compress_keep_original_input.isChecked()))
+        save_setting_value("watermark_enabled", int(self.watermark_enabled_input.isChecked()))
         save_setting_value("timeshift_segment_hours", int(self.timeshift_segment_hours_input.value()))
         save_setting_value("timeshift_segment_minutes", int(self.timeshift_segment_minutes_input.value()))
         save_setting_value("timeshift_segment_seconds", int(self.timeshift_segment_seconds_input.value()))
@@ -492,6 +495,21 @@ class SettingsIOMixin:
         if directory:
             self.output_dir_input.setText(directory)
 
+    def _browse_watermark_file(self) -> None:
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "ロゴ画像を選択",
+            "",
+            "画像ファイル (*.png *.jpg *.jpeg *.webp *.bmp)",
+        )
+        if file_path:
+            self.watermark_path_input.setText(file_path)
+
+    def _open_watermark_dialog(self) -> None:
+        dialog = WatermarkDialog(self)
+        if dialog.exec():
+            self._load_settings()
+
     def _update_auto_record_option_state(self, enabled: bool) -> None:
         self.auto_startup_input.setEnabled(True)
 
@@ -508,4 +526,3 @@ class SettingsIOMixin:
         ]
         for widget in widgets:
             widget.setEnabled(True)
-

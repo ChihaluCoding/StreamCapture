@@ -128,6 +128,300 @@ def build_compressed_output_path(input_path: Path) -> Path:  # 圧縮後の出�
             return numbered
     return base.with_name(f"{base.name}_compressed_overflow").with_suffix(".mp4")
 
+def _resolve_watermark_path(status_cb: Optional[Callable[[str], None]]) -> Optional[Path]:
+    raw_path = load_setting_value("watermark_path", "", str).strip()
+    if not raw_path:
+        if status_cb is not None:
+            status_cb("ロゴ透かしが有効ですが、ロゴ画像が未指定です。")
+        return None
+    path = Path(raw_path).expanduser()
+    if not path.exists():
+        if status_cb is not None:
+            status_cb(f"ロゴ画像が見つかりません: {path}")
+        return None
+    return path
+
+def _escape_drawtext_text(text: str) -> str:
+    escaped = text.replace("\\", "\\\\")
+    escaped = escaped.replace(":", "\\:")
+    escaped = escaped.replace("'", "\\'")
+    escaped = escaped.replace("%", "\\%")
+    return escaped
+
+def _apply_text_watermark(
+    input_path: Path,
+    output_path: Path,
+    text: str,
+    status_cb: Optional[Callable[[str], None]] = None,
+) -> Optional[Path]:
+    if not input_path.exists():
+        message = f"透かし対象ファイルが存在しません: {input_path}"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    if input_path.stat().st_size == 0:
+        message = f"透かし対象ファイルが空です: {input_path}"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    ffmpeg_path = find_ffmpeg_path()
+    if not ffmpeg_path:
+        message = "ffmpegが見つかりません。PATHにffmpegを追加してください。"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    margin = int(load_setting_value("watermark_margin_px", 16, int))
+    margin = max(0, margin)
+    random_enabled = load_bool_setting("watermark_random_enabled", False)
+    interval = max(1, int(load_setting_value("watermark_random_interval_sec", 5, int)))
+    opacity = float(load_setting_value("watermark_opacity", 1.0, float))
+    opacity = max(0.0, min(1.0, opacity))
+    text_size = float(load_setting_value("watermark_text_size_percent", 3.0, float))
+    size_ratio = max(0.01, min(0.2, text_size / 100.0))
+    escaped_text = _escape_drawtext_text(text)
+    fontcolor = f"white@{opacity:.2f}"
+    position = load_setting_value("watermark_position", "br", str).strip().lower() or "br"
+    if random_enabled:
+        x_expr = (
+            f"{margin}+max(0\\,w-tw-2*{margin})*"
+            f"mod(mod(sin((floor(t/{interval})+1)*12.9898)*43758.5453\\,1)+1\\,1)"
+        )
+        y_expr = (
+            f"{margin}+max(0\\,h-th-2*{margin})*"
+            f"mod(mod(sin((floor(t/{interval})+1)*78.233)*12515.8733\\,1)+1\\,1)"
+        )
+    else:
+        if position == "tl":
+            x_expr = f"{margin}"
+            y_expr = f"{margin}"
+        elif position == "tr":
+            x_expr = f"w-tw-{margin}"
+            y_expr = f"{margin}"
+        elif position == "bl":
+            x_expr = f"{margin}"
+            y_expr = f"h-th-{margin}"
+        else:
+            x_expr = f"w-tw-{margin}"
+            y_expr = f"h-th-{margin}"
+    filter_graph = (
+        "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[base];"
+        f"[base]drawtext=text='{escaped_text}':"
+        f"x={x_expr}:y={y_expr}:"
+        f"fontsize=trunc(w*{size_ratio}):"
+        f"fontcolor={fontcolor}:borderw=2:bordercolor=black@0.6[v]"
+    )
+    temp_output = ensure_unique_path(
+        output_path.with_name(f"{output_path.stem}_watermark_tmp{output_path.suffix}")
+    )
+    message = f"透かし合成を開始します: {output_path}"
+    if status_cb is not None:
+        status_cb(message)
+    command = [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        str(input_path),
+        "-vf",
+        filter_graph,
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+        "-shortest",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "medium",
+        "-crf",
+        "23",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+    ]
+    if temp_output.suffix.lower() in (".mp4", ".mov"):
+        command += ["-movflags", "+faststart"]
+    command.append(str(temp_output))
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode != 0:
+        if temp_output.exists():
+            temp_output.unlink(missing_ok=True)
+        stderr_text = "\n".join(result.stderr.strip().splitlines()[-15:]) if result.stderr else "詳細不明"
+        message = f"透かし合成に失敗しました: {stderr_text}"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    if not temp_output.exists() or temp_output.stat().st_size == 0:
+        if temp_output.exists():
+            temp_output.unlink(missing_ok=True)
+        if status_cb is not None:
+            status_cb("透かし合成の出力が空のため失敗扱いにします。")
+        return None
+    try:
+        if output_path.exists():
+            output_path.unlink(missing_ok=True)
+        temp_output.replace(output_path)
+    except OSError as exc:
+        if status_cb is not None:
+            status_cb(f"透かし合成後のファイル移動に失敗しました: {exc}")
+        return None
+    message = f"透かし合成が完了しました: {output_path}"
+    if status_cb is not None:
+        status_cb(message)
+    return output_path
+
+def _build_output_path_for_format(input_path: Path, output_format: str) -> Path:
+    if output_format in (OUTPUT_FORMAT_MP4_COPY, OUTPUT_FORMAT_MP4_LIGHT):
+        return build_output_path(input_path, ".mp4")
+    if output_format == OUTPUT_FORMAT_MOV:
+        return build_output_path(input_path, ".mov")
+    if output_format == OUTPUT_FORMAT_FLV:
+        return build_output_path(input_path, ".flv")
+    if output_format == OUTPUT_FORMAT_MKV:
+        return build_output_path(input_path, ".mkv")
+    return build_mp4_output_path(input_path)
+
+def _apply_watermark(  # 透かし合成
+    input_path: Path,
+    output_path: Path,
+    watermark_path: Path,
+    status_cb: Optional[Callable[[str], None]] = None,
+) -> Optional[Path]:
+    if not input_path.exists():
+        message = f"透かし対象ファイルが存在しません: {input_path}"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    if input_path.stat().st_size == 0:
+        message = f"透かし対象ファイルが空です: {input_path}"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    ffmpeg_path = find_ffmpeg_path()
+    if not ffmpeg_path:
+        message = "ffmpegが見つかりません。PATHにffmpegを追加してください。"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    margin = int(load_setting_value("watermark_margin_px", 16, int))
+    margin = max(0, margin)
+    random_enabled = load_bool_setting("watermark_random_enabled", False)
+    interval = max(1, int(load_setting_value("watermark_random_interval_sec", 5, int)))
+    opacity = float(load_setting_value("watermark_opacity", 1.0, float))
+    opacity = max(0.0, min(1.0, opacity))
+    scale_percent = float(load_setting_value("watermark_scale_percent", 13.0, float))
+    scale_ratio = max(0.01, min(1.0, scale_percent / 100.0))
+    position = load_setting_value("watermark_position", "br", str).strip().lower() or "br"
+    if random_enabled:
+        x_expr = (
+            f"{margin}+max(0\\,W-w-2*{margin})*"
+            f"mod(mod(sin((floor(t/{interval})+1)*12.9898)*43758.5453\\,1)+1\\,1)"
+        )
+        y_expr = (
+            f"{margin}+max(0\\,H-h-2*{margin})*"
+            f"mod(mod(sin((floor(t/{interval})+1)*78.233)*12515.8733\\,1)+1\\,1)"
+        )
+    else:
+        if position == "tl":
+            x_expr = f"{margin}"
+            y_expr = f"{margin}"
+        elif position == "tr":
+            x_expr = f"W-w-{margin}"
+            y_expr = f"{margin}"
+        elif position == "bl":
+            x_expr = f"{margin}"
+            y_expr = f"H-h-{margin}"
+        else:
+            x_expr = f"W-w-{margin}"
+            y_expr = f"H-h-{margin}"
+    filter_graph = (
+        "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=rgba[base];"
+        f"[1:v]format=rgba,colorchannelmixer=aa={opacity}[wmraw];"
+        f"[wmraw][base]scale2ref=w=trunc(main_w*{scale_ratio}):h=trunc(ow/mdar)[wm][base2];"
+        f"[base2][wm]overlay={x_expr}:{y_expr},format=yuv420p[v]"
+    )
+    temp_output = ensure_unique_path(
+        output_path.with_name(f"{output_path.stem}_watermark_tmp{output_path.suffix}")
+    )
+    message = f"透かし合成を開始します: {output_path}"
+    if status_cb is not None:
+        status_cb(message)
+    command = [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        str(input_path),
+        "-loop",
+        "1",
+        "-i",
+        str(watermark_path),
+        "-filter_complex",
+        filter_graph,
+        "-map",
+        "[v]",
+        "-map",
+        "0:a?",
+        "-shortest",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "medium",
+        "-crf",
+        "23",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+    ]
+    if temp_output.suffix.lower() in (".mp4", ".mov"):
+        command += ["-movflags", "+faststart"]
+    command.append(str(temp_output))
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode != 0:
+        if temp_output.exists():
+            temp_output.unlink(missing_ok=True)
+        stderr_text = "\n".join(result.stderr.strip().splitlines()[-15:]) if result.stderr else "詳細不明"
+        message = f"透かし合成に失敗しました: {stderr_text}"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    if not temp_output.exists() or temp_output.stat().st_size == 0:
+        if temp_output.exists():
+            temp_output.unlink(missing_ok=True)
+        if status_cb is not None:
+            status_cb("透かし合成の出力が空のため失敗扱いにします。")
+        return None
+    try:
+        if output_path.exists():
+            output_path.unlink(missing_ok=True)
+        temp_output.replace(output_path)
+    except OSError as exc:
+        if status_cb is not None:
+            status_cb(f"透かし合成後のファイル移動に失敗しました: {exc}")
+        return None
+    message = f"透かし合成が完了しました: {output_path}"
+    if status_cb is not None:
+        status_cb(message)
+    return output_path
+
 def build_segment_output_path(base_path: Path, index: int) -> Path:  # 分割録画の出力パス生成
     if index <= 0:
         return base_path
@@ -447,11 +741,42 @@ def convert_recording(  # 出力形式に合わせた変換
     status_cb: Optional[Callable[[str], None]] = None,  # 状態通知コールバック
 ) -> Optional[Path]:  # 返り値は出力パス
     normalized_format = normalize_output_format(output_format)  # 出力形式を正規化
+    watermark_enabled = load_bool_setting("watermark_enabled", False)
+    watermark_mode = load_setting_value("watermark_mode", "image", str).strip().lower() or "image"
     if normalized_format == OUTPUT_FORMAT_TS:  # TS指定の場合
+        if watermark_enabled and status_cb is not None:
+            status_cb("透かし合成はTS形式では適用できないためスキップします。")
         message = f"TS形式のため変換をスキップします: {input_path}"  # スキップ通知
         if status_cb is not None:  # コールバックが指定されている場合
             status_cb(message)  # 状態通知
         return input_path  # TSはそのまま返却
+    if watermark_enabled and normalized_format not in (OUTPUT_FORMAT_MP3, OUTPUT_FORMAT_WAV):
+        output_path = _build_output_path_for_format(input_path, normalized_format)
+        if watermark_mode == "text":
+            watermark_text = load_setting_value("watermark_text", "", str).strip()
+            if watermark_text:
+                watermarked_path = _apply_text_watermark(
+                    input_path,
+                    output_path,
+                    watermark_text,
+                    status_cb=status_cb,
+                )
+                if watermarked_path is not None:
+                    delete_source_ts(input_path, status_cb=status_cb)
+                    return watermarked_path
+                if status_cb is not None:
+                    status_cb("透かし合成に失敗したため通常変換を続行します。")
+            elif status_cb is not None:
+                status_cb("透かしテキストが未入力のため通常変換を続行します。")
+        else:
+            watermark_path = _resolve_watermark_path(status_cb)
+            if watermark_path is not None:
+                watermarked_path = _apply_watermark(input_path, output_path, watermark_path, status_cb=status_cb)
+                if watermarked_path is not None:
+                    delete_source_ts(input_path, status_cb=status_cb)
+                    return watermarked_path
+                if status_cb is not None:
+                    status_cb("透かし合成に失敗したため通常変換を続行します。")
     if normalized_format == OUTPUT_FORMAT_MP4_COPY and input_path.suffix.lower() == ".mp4":
         message = f"MP4形式のため変換をスキップします: {input_path}"
         if status_cb is not None:

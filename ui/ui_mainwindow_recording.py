@@ -454,6 +454,37 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         dialog.show()
         popups[url] = dialog
 
+    def _on_watermark_started(self, url: str) -> None:
+        if not url:
+            return
+        popups = getattr(self, "_conversion_popups", None)
+        if not isinstance(popups, dict):
+            popups = {}
+            self._conversion_popups = popups
+        dialog = popups.get(url)
+        if isinstance(dialog, QtWidgets.QProgressDialog):
+            dialog.setWindowTitle("透かし合成中")
+            dialog.setLabelText("透かしを合成中です...")
+            return
+        dialog = QtWidgets.QProgressDialog("透かしを合成中です...", "", 0, 0, self)
+        dialog.setWindowTitle("透かし合成中")
+        dialog.setWindowModality(QtCore.Qt.WindowModality.NonModal)
+        dialog.setCancelButton(None)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.setMinimumDuration(0)
+        layout = dialog.layout()
+        if layout is not None:
+            layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        label = dialog.findChild(QtWidgets.QLabel)
+        if isinstance(label, QtWidgets.QLabel):
+            label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        bar = dialog.findChild(QtWidgets.QProgressBar)
+        if isinstance(bar, QtWidgets.QProgressBar):
+            bar.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        dialog.show()
+        popups[url] = dialog
+
     def _on_compression_started(self, url: str) -> None:
         if not url:
             return
@@ -764,6 +795,7 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         thread.started.connect(worker.run)  # 開始イベント接続
         worker.log_signal.connect(self._append_log)  # ログ接続
         worker.conversion_started.connect(self._on_conversion_started)
+        worker.watermark_started.connect(self._on_watermark_started)
         worker.compression_started.connect(self._on_compression_started)
         worker.compression_finished.connect(self._close_conversion_popup)
         worker.finished_signal.connect(  # 終了イベント接続
@@ -896,6 +928,7 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         self.worker_thread.started.connect(self.worker.run)  # 開始イベント接続
         self.worker.log_signal.connect(self._append_log)  # ログ接続
         self.worker.conversion_started.connect(self._on_conversion_started)
+        self.worker.watermark_started.connect(self._on_watermark_started)
         self.worker.compression_started.connect(self._on_compression_started)
         self.worker.compression_finished.connect(self._close_conversion_popup)
         self.worker.finished_signal.connect(self._on_recording_finished)  # 終了イベント接続
