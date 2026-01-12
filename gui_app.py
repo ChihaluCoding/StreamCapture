@@ -5,8 +5,8 @@ import sys  # アプリ終了コード
 from pathlib import Path  # パス操作
 from typing import Iterable  # 型ヒント補助
 from PyQt6 import QtCore, QtGui, QtWidgets  # PyQt6のGUI基盤
-from theme_utils import get_ui_font_family, load_ui_font_files, register_ui_font_files
-from ui_app import MainWindow  # メインウィンドウを読み込み
+from utils.theme_utils import get_ui_font_family, load_ui_font_files, register_ui_font_files
+from ui.ui_app import MainWindow  # メインウィンドウを読み込み
 
 class _FilteredStderr:  # 標準エラーのフィルタクラス
     def __init__(self, original, suppress_keywords: Iterable[str]) -> None:  # 初期化処理
