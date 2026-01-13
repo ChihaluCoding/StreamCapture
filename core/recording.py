@@ -2,6 +2,7 @@
 from __future__ import annotations  # 型ヒントの将来互換対応
 import os  # 環境変数
 import re  # 拡張子判定
+from collections import deque  # エラーログの末尾保持
 from datetime import datetime  # 日付フォルダ
 import shutil  # 実行ファイル探索
 import subprocess  # 外部コマンド実行
@@ -54,6 +55,103 @@ def find_ffmpeg_path() -> Optional[str]:  # ffmpegのパスを解決
         return str(preferred)
     return shutil.which("ffmpeg")  # PATHを検索
 
+def find_ffprobe_path() -> Optional[str]:  # ffprobeのパスを解決
+    env_path = os.environ.get("FFMPEG_PATH", "").strip()
+    if env_path:
+        ffmpeg_path = Path(env_path)
+        probe_name = "ffprobe.exe" if ffmpeg_path.name.lower().endswith(".exe") else "ffprobe"
+        candidate = ffmpeg_path.with_name(probe_name)
+        if candidate.exists():
+            return str(candidate)
+    for name in ("ffprobe", "ffprobe.exe"):
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
+
+def _probe_media_duration(input_path: Path) -> Optional[float]:
+    ffprobe_path = find_ffprobe_path()
+    if not ffprobe_path:
+        return None
+    result = subprocess.run(
+        [
+            ffprobe_path,
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=nokey=1:noprint_wrappers=1",
+            str(input_path),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        duration = float(result.stdout.strip())
+    except (TypeError, ValueError):
+        return None
+    if duration <= 0:
+        return None
+    return duration
+
+def _run_ffmpeg_command(
+    command: list[str],
+    input_path: Path,
+    progress_cb: Optional[Callable[[int], None]] = None,
+) -> tuple[int, str]:
+    if progress_cb is None:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        return result.returncode, result.stderr or ""
+    duration = _probe_media_duration(input_path)
+    progress_cb(0)
+    use_progress = duration is not None
+    if use_progress:
+        command = command[:-1] + ["-progress", "pipe:1", "-nostats", command[-1]]
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+    )
+    tail = deque(maxlen=15)
+    last_percent = -1
+    if process.stdout is not None:
+        for line in process.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            tail.append(line)
+            if use_progress and line.startswith("out_time_ms="):
+                value = line.split("=", 1)[1]
+                try:
+                    out_time_ms = int(value)
+                except ValueError:
+                    continue
+                percent = int(min(100, (out_time_ms / 1_000_000) / duration * 100))
+                if percent != last_percent:
+                    last_percent = percent
+                    progress_cb(percent)
+    return_code = process.wait()
+    if return_code == 0:
+        progress_cb(100)
+    return return_code, "\n".join(tail)
+
 def find_whisper_path() -> Optional[str]:  # Whisper CLIのパスを解決
     for name in ("whisper", "whisper.exe"):
         path = shutil.which(name)
@@ -65,6 +163,7 @@ def transcribe_recording(  # 録画後の文字起こし
     input_path: Path,
     model: str,
     status_cb: Optional[Callable[[str], None]] = None,
+    progress_cb: Optional[Callable[[int], None]] = None,
 ) -> Optional[Path]:
     if not input_path.exists():
         message = f"文字起こし対象ファイルが存在しません: {input_path}"
@@ -99,20 +198,60 @@ def transcribe_recording(  # 録画後の文字起こし
     ]
     if status_cb is not None:
         status_cb(f"文字起こしを開始します: {output_path}")
-    result = subprocess.run(
+    if progress_cb is not None:
+        progress_cb(0)
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    process = subprocess.Popen(
         command,
-        capture_output=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         errors="replace",
-        check=False,
+        env=env,
+        bufsize=1,
     )
-    if result.returncode != 0:
-        stderr_text = "\n".join(result.stderr.strip().splitlines()[-15:]) if result.stderr else "詳細不明"
+    stderr_tail = deque(maxlen=15)
+    stderr_buffer = ""
+    last_percent = -1
+    percent_re = re.compile(r"(\d{1,3})%")
+    def _handle_progress(text: str) -> None:
+        nonlocal stderr_buffer, last_percent
+        stderr_buffer += text
+        parts = re.split(r"[\r\n]+", stderr_buffer)
+        stderr_buffer = parts.pop() if parts else ""
+        for part in parts:
+            if part:
+                stderr_tail.append(part)
+            match = percent_re.search(part)
+            if match and progress_cb is not None:
+                percent = min(100, int(match.group(1)))
+                if percent != last_percent:
+                    last_percent = percent
+                    progress_cb(percent)
+    if process.stderr is not None:
+        while True:
+            chunk = process.stderr.read(1)
+            if chunk == "":
+                break
+            _handle_progress(chunk)
+    return_code = process.wait()
+    if stderr_buffer:
+        stderr_tail.append(stderr_buffer)
+        match = percent_re.search(stderr_buffer)
+        if match and progress_cb is not None:
+            percent = min(100, int(match.group(1)))
+            if percent != last_percent:
+                progress_cb(percent)
+    if return_code != 0:
+        stderr_text = "\n".join(stderr_tail) if stderr_tail else "詳細不明"
         message = f"文字起こしに失敗しました: {stderr_text}"
         if status_cb is not None:
             status_cb(message)
         return None
+    if progress_cb is not None:
+        progress_cb(100)
     if output_path.exists():
         if status_cb is not None:
             status_cb(f"文字起こしが完了しました: {output_path}")
@@ -220,6 +359,7 @@ def _apply_text_watermark(
     output_path: Path,
     text: str,
     status_cb: Optional[Callable[[str], None]] = None,
+    progress_cb: Optional[Callable[[int], None]] = None,
 ) -> Optional[Path]:
     if not input_path.exists():
         message = f"透かし対象ファイルが存在しません: {input_path}"
@@ -313,18 +453,11 @@ def _apply_text_watermark(
     if temp_output.suffix.lower() in (".mp4", ".mov"):
         command += ["-movflags", "+faststart"]
     command.append(str(temp_output))
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
-    if result.returncode != 0:
+    return_code, stderr_text_full = _run_ffmpeg_command(command, input_path, progress_cb=progress_cb)
+    if return_code != 0:
         if temp_output.exists():
             temp_output.unlink(missing_ok=True)
-        stderr_text = "\n".join(result.stderr.strip().splitlines()[-15:]) if result.stderr else "詳細不明"
+        stderr_text = "\n".join(stderr_text_full.strip().splitlines()[-15:]) if stderr_text_full else "詳細不明"
         message = f"透かし合成に失敗しました: {stderr_text}"
         if status_cb is not None:
             status_cb(message)
@@ -364,6 +497,7 @@ def _apply_watermark(  # 透かし合成
     output_path: Path,
     watermark_path: Path,
     status_cb: Optional[Callable[[str], None]] = None,
+    progress_cb: Optional[Callable[[int], None]] = None,
 ) -> Optional[Path]:
     if not input_path.exists():
         message = f"透かし対象ファイルが存在しません: {input_path}"
@@ -458,18 +592,11 @@ def _apply_watermark(  # 透かし合成
     if temp_output.suffix.lower() in (".mp4", ".mov"):
         command += ["-movflags", "+faststart"]
     command.append(str(temp_output))
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
-    if result.returncode != 0:
+    return_code, stderr_text_full = _run_ffmpeg_command(command, input_path, progress_cb=progress_cb)
+    if return_code != 0:
         if temp_output.exists():
             temp_output.unlink(missing_ok=True)
-        stderr_text = "\n".join(result.stderr.strip().splitlines()[-15:]) if result.stderr else "詳細不明"
+        stderr_text = "\n".join(stderr_text_full.strip().splitlines()[-15:]) if stderr_text_full else "詳細不明"
         message = f"透かし合成に失敗しました: {stderr_text}"
         if status_cb is not None:
             status_cb(message)
@@ -524,6 +651,7 @@ def delete_source_ts(  # 変換後のTS削除処理
 def convert_to_mp4(  # MP4変換処理
     input_path: Path,  # 入力パス
     status_cb: Optional[Callable[[str], None]] = None,  # 状態通知コールバック
+    progress_cb: Optional[Callable[[int], None]] = None,  # 進捗通知コールバック
 ) -> Optional[Path]:  # 返り値は出力パス
     if not input_path.exists():  # 入力ファイルが無い場合
         message = f"変換対象ファイルが存在しません: {input_path}"  # 通知文
@@ -558,16 +686,9 @@ def convert_to_mp4(  # MP4変換処理
         "+faststart",  # 先頭へメタデータ移動
         str(output_path),  # 出力パス
     ]  # コマンド定義終了
-    result = subprocess.run(  # ffmpeg実行
-        command,  # コマンド指定
-        capture_output=True,  # 出力を取得
-        text=True,  # テキストとして取得
-        encoding="utf-8",  # 文字コードを指定
-        errors="replace",  # デコード失敗時は置換
-        check=False,  # 例外にしない
-    )  # 実行結果を取得
-    if result.returncode != 0:  # 失敗時の処理
-        stderr_text_full = result.stderr.strip()  # 標準エラーの全文を取得
+    return_code, stderr_text_full = _run_ffmpeg_command(command, input_path, progress_cb=progress_cb)
+    if return_code != 0:  # 失敗時の処理
+        stderr_text_full = stderr_text_full.strip()  # 標準エラーの全文を取得
         stderr_tail = stderr_text_full.splitlines()[-5:]  # エラー末尾を抽出
         stderr_text = "\n".join(stderr_tail) if stderr_tail else "詳細不明"  # エラー整形
         retry_message = "再エンコードでMP4変換を再試行します。"  # 再試行通知
@@ -596,21 +717,18 @@ def convert_to_mp4(  # MP4変換処理
                 "+faststart",  # 先頭へメタデータ移動
                 str(output_path),  # 出力パス
             ]  # 再試行コマンド定義終了
-            result_retry = subprocess.run(  # 再試行の実行
-                command_retry,  # 再試行コマンド
-                capture_output=True,  # 出力を取得
-                text=True,  # テキストとして取得
-                encoding="utf-8",  # 文字コードを指定
-                errors="replace",  # デコード失敗時は置換
-                check=False,  # 例外にしない
-            )  # 再試行結果を取得
-            if result_retry.returncode == 0:  # 再試行成功時
+            retry_code, retry_stderr_full = _run_ffmpeg_command(
+                command_retry,
+                input_path,
+                progress_cb=progress_cb,
+            )
+            if retry_code == 0:  # 再試行成功時
                 message = f"MP4変換が完了しました（再エンコード）: {output_path}"  # 完了通知
                 if status_cb is not None:  # コールバックが指定されている場合
                     status_cb(message)  # 状態通知
                 delete_source_ts(input_path, status_cb=status_cb)  # 元TSファイルを削除
                 return output_path  # 出力パスを返却
-            retry_stderr = result_retry.stderr.strip().splitlines()[-5:]  # 再試行エラー末尾
+            retry_stderr = retry_stderr_full.strip().splitlines()[-5:]  # 再試行エラー末尾
             retry_text = "\n".join(retry_stderr) if retry_stderr else "詳細不明"  # 再試行エラー整形
             message = f"MP4変換に失敗しました（再試行）: {retry_text}"  # 再試行失敗通知
             if status_cb is not None:  # コールバックが指定されている場合
@@ -629,6 +747,7 @@ def convert_to_mp4(  # MP4変換処理
 def convert_to_mp4_light(  # MP4軽量変換処理
     input_path: Path,  # 入力パス
     status_cb: Optional[Callable[[str], None]] = None,  # 状態通知コールバック
+    progress_cb: Optional[Callable[[int], None]] = None,  # 進捗通知コールバック
 ) -> Optional[Path]:  # 返り値は出力パス
     if not input_path.exists():  # 入力ファイルが無い場合
         message = f"変換対象ファイルが存在しません: {input_path}"  # 通知文
@@ -671,16 +790,9 @@ def convert_to_mp4_light(  # MP4軽量変換処理
         "+faststart",  # 先頭へメタデータ移動
         str(output_path),  # 出力パス
     ]  # コマンド定義終了
-    result = subprocess.run(  # ffmpeg実行
-        command,  # コマンド指定
-        capture_output=True,  # 出力を取得
-        text=True,  # テキストとして取得
-        encoding="utf-8",  # 文字コードを指定
-        errors="replace",  # デコード失敗時は置換
-        check=False,  # 例外にしない
-    )  # 実行結果を取得
-    if result.returncode != 0:  # 失敗時の処理
-        stderr_text_full = result.stderr.strip()  # 標準エラーの全文を取得
+    return_code, stderr_text_full = _run_ffmpeg_command(command, input_path, progress_cb=progress_cb)
+    if return_code != 0:  # 失敗時の処理
+        stderr_text_full = stderr_text_full.strip()  # 標準エラーの全文を取得
         stderr_tail = stderr_text_full.splitlines()[-5:]  # エラー末尾を抽出
         stderr_text = "\n".join(stderr_tail) if stderr_tail else "詳細不明"  # エラー整形
         message = f"MP4軽量変換に失敗しました: {stderr_text}"  # 失敗通知
@@ -697,6 +809,7 @@ def convert_to_container_copy(  # コンテナ変換（コピー）
     input_path: Path,  # 入力パス
     suffix: str,  # 出力拡張子
     status_cb: Optional[Callable[[str], None]] = None,  # 状態通知コールバック
+    progress_cb: Optional[Callable[[int], None]] = None,  # 進捗通知コールバック
 ) -> Optional[Path]:  # 返り値は出力パス
     if not input_path.exists():  # 入力ファイルが無い場合
         message = f"変換対象ファイルが存在しません: {input_path}"
@@ -727,16 +840,9 @@ def convert_to_container_copy(  # コンテナ変換（コピー）
         "copy",
         str(output_path),
     ]
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
-    if result.returncode != 0:
-        stderr_text = "\n".join(result.stderr.strip().splitlines()[-5:]) if result.stderr else "詳細不明"
+    return_code, stderr_text_full = _run_ffmpeg_command(command, input_path, progress_cb=progress_cb)
+    if return_code != 0:
+        stderr_text = "\n".join(stderr_text_full.strip().splitlines()[-5:]) if stderr_text_full else "詳細不明"
         message = f"{suffix[1:].upper()}変換に失敗しました: {stderr_text}"
         if status_cb is not None:
             status_cb(message)
@@ -751,6 +857,7 @@ def convert_to_audio(  # 音声変換処理
     input_path: Path,  # 入力パス
     suffix: str,  # 出力拡張子
     status_cb: Optional[Callable[[str], None]] = None,  # 状態通知コールバック
+    progress_cb: Optional[Callable[[int], None]] = None,  # 進捗通知コールバック
 ) -> Optional[Path]:  # 返り値は出力パス
     if not input_path.exists():
         message = f"変換対象ファイルが存在しません: {input_path}"
@@ -786,16 +893,9 @@ def convert_to_audio(  # 音声変換処理
         "192k",
         str(output_path),
     ]
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
-    if result.returncode != 0:
-        stderr_text = "\n".join(result.stderr.strip().splitlines()[-5:]) if result.stderr else "詳細不明"
+    return_code, stderr_text_full = _run_ffmpeg_command(command, input_path, progress_cb=progress_cb)
+    if return_code != 0:
+        stderr_text = "\n".join(stderr_text_full.strip().splitlines()[-5:]) if stderr_text_full else "詳細不明"
         message = f"{fmt_label}変換に失敗しました: {stderr_text}"
         if status_cb is not None:
             status_cb(message)
@@ -810,6 +910,7 @@ def convert_recording(  # 出力形式に合わせた変換
     input_path: Path,  # 入力パス
     output_format: str,  # 出力形式指定
     status_cb: Optional[Callable[[str], None]] = None,  # 状態通知コールバック
+    progress_cb: Optional[Callable[[int], None]] = None,  # 進捗通知コールバック
 ) -> Optional[Path]:  # 返り値は出力パス
     normalized_format = normalize_output_format(output_format)  # 出力形式を正規化
     watermark_enabled = load_bool_setting("watermark_enabled", False)
@@ -831,6 +932,7 @@ def convert_recording(  # 出力形式に合わせた変換
                     output_path,
                     watermark_text,
                     status_cb=status_cb,
+                    progress_cb=progress_cb,
                 )
                 if watermarked_path is not None:
                     delete_source_ts(input_path, status_cb=status_cb)
@@ -842,7 +944,13 @@ def convert_recording(  # 出力形式に合わせた変換
         else:
             watermark_path = _resolve_watermark_path(status_cb)
             if watermark_path is not None:
-                watermarked_path = _apply_watermark(input_path, output_path, watermark_path, status_cb=status_cb)
+                watermarked_path = _apply_watermark(
+                    input_path,
+                    output_path,
+                    watermark_path,
+                    status_cb=status_cb,
+                    progress_cb=progress_cb,
+                )
                 if watermarked_path is not None:
                     delete_source_ts(input_path, status_cb=status_cb)
                     return watermarked_path
@@ -854,22 +962,23 @@ def convert_recording(  # 出力形式に合わせた変換
             status_cb(message)
         return input_path
     if normalized_format == OUTPUT_FORMAT_MP4_LIGHT:  # 軽量MP4指定の場合
-        return convert_to_mp4_light(input_path, status_cb=status_cb)  # 軽量変換を実行
+        return convert_to_mp4_light(input_path, status_cb=status_cb, progress_cb=progress_cb)  # 軽量変換を実行
     if normalized_format == OUTPUT_FORMAT_MOV:  # MOV指定
-        return convert_to_container_copy(input_path, ".mov", status_cb=status_cb)
+        return convert_to_container_copy(input_path, ".mov", status_cb=status_cb, progress_cb=progress_cb)
     if normalized_format == OUTPUT_FORMAT_FLV:  # FLV指定
-        return convert_to_container_copy(input_path, ".flv", status_cb=status_cb)
+        return convert_to_container_copy(input_path, ".flv", status_cb=status_cb, progress_cb=progress_cb)
     if normalized_format == OUTPUT_FORMAT_MKV:  # MKV指定
-        return convert_to_container_copy(input_path, ".mkv", status_cb=status_cb)
+        return convert_to_container_copy(input_path, ".mkv", status_cb=status_cb, progress_cb=progress_cb)
     if normalized_format == OUTPUT_FORMAT_MP3:  # MP3指定
-        return convert_to_audio(input_path, ".mp3", status_cb=status_cb)
+        return convert_to_audio(input_path, ".mp3", status_cb=status_cb, progress_cb=progress_cb)
     if normalized_format == OUTPUT_FORMAT_WAV:  # WAV指定
-        return convert_to_audio(input_path, ".wav", status_cb=status_cb)
-    return convert_to_mp4(input_path, status_cb=status_cb)  # 高品質コピーMP4を実行
+        return convert_to_audio(input_path, ".wav", status_cb=status_cb, progress_cb=progress_cb)
+    return convert_to_mp4(input_path, status_cb=status_cb, progress_cb=progress_cb)  # 高品質コピーMP4を実行
 
 def compress_recording(  # 録画後の自動圧縮
     input_path: Path,  # 入力パス
     status_cb: Optional[Callable[[str], None]] = None,  # 状態通知コールバック
+    progress_cb: Optional[Callable[[int], None]] = None,  # 進捗通知コールバック
 ) -> Optional[Path]:  # 返り値は出力パス
     if not input_path.exists():
         message = f"圧縮対象ファイルが存在しません: {input_path}"
@@ -943,16 +1052,9 @@ def compress_recording(  # 録画後の自動圧縮
             flag_index = len(command) - 1
         command.insert(flag_index, "hvc1")
         command.insert(flag_index, "-tag:v")
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
-    if result.returncode != 0:
-        stderr_text = "\n".join(result.stderr.strip().splitlines()[-5:]) if result.stderr else "詳細不明"
+    return_code, stderr_text_full = _run_ffmpeg_command(command, input_path, progress_cb=progress_cb)
+    if return_code != 0:
+        stderr_text = "\n".join(stderr_text_full.strip().splitlines()[-5:]) if stderr_text_full else "詳細不明"
         message = f"録画後の自動圧縮に失敗しました: {stderr_text}"
         if status_cb is not None:
             status_cb(message)

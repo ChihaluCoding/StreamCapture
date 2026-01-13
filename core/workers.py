@@ -29,9 +29,13 @@ from utils.settings_store import load_bool_setting, load_setting_value  # 設定
 class RecorderWorker(QtCore.QObject):  # 録画ワーカー定義
     log_signal = QtCore.pyqtSignal(str)  # ログ通知シグナル
     conversion_started = QtCore.pyqtSignal(str)  # 変換開始通知シグナル
+    conversion_progress = QtCore.pyqtSignal(str, int)  # 変換進捗通知シグナル
     watermark_started = QtCore.pyqtSignal(str)  # 透かし合成開始通知シグナル
     compression_started = QtCore.pyqtSignal(str)  # 圧縮開始通知シグナル
     compression_finished = QtCore.pyqtSignal(str)  # 圧縮終了通知シグナル
+    transcribe_started = QtCore.pyqtSignal(str)  # 文字起こし開始通知シグナル
+    transcribe_progress = QtCore.pyqtSignal(str, int)  # 文字起こし進捗通知シグナル
+    transcribe_finished = QtCore.pyqtSignal(str)  # 文字起こし完了通知シグナル
     finished_signal = QtCore.pyqtSignal(int)  # 終了通知シグナル
     def __init__(  # 初期化処理
         self,  # 自身参照
@@ -83,6 +87,8 @@ class RecorderWorker(QtCore.QObject):  # 録画ワーカー定義
         if normalized_format != OUTPUT_FORMAT_TS and segment_paths:
             self.conversion_started.emit(self.url)
         converted_paths: list[Path] = []
+        def conversion_progress_cb(percent: int) -> None:  # 進捗通知用コールバック
+            self.conversion_progress.emit(self.url, int(percent))
         if normalized_format == OUTPUT_FORMAT_TS:
             converted_paths = list(segment_paths)
         else:
@@ -100,6 +106,7 @@ class RecorderWorker(QtCore.QObject):  # 録画ワーカー定義
                     segment_path,
                     normalized_format,
                     status_cb=status_cb,
+                    progress_cb=conversion_progress_cb,
                 )
                 if converted_path:
                     converted_paths.append(converted_path)
@@ -108,13 +115,23 @@ class RecorderWorker(QtCore.QObject):  # 録画ワーカー定義
             self.compression_started.emit(self.url)
             final_paths = []
             for converted_path in converted_paths:
-                compressed_path = compress_recording(converted_path, status_cb=status_cb)
+                compressed_path = compress_recording(
+                    converted_path,
+                    status_cb=status_cb,
+                    progress_cb=conversion_progress_cb,
+                )
                 final_paths.append(compressed_path or converted_path)
             self.compression_finished.emit(self.url)
         if load_bool_setting("transcribe_enabled", False):
             model = load_setting_value("transcribe_model", "small", str)
+            if final_paths:
+                self.transcribe_started.emit(self.url)
+            def progress_cb(percent: int) -> None:  # 進捗通知用コールバック
+                self.transcribe_progress.emit(self.url, int(percent))
             for final_path in final_paths:
-                transcribe_recording(final_path, model, status_cb=status_cb)
+                transcribe_recording(final_path, model, status_cb=status_cb, progress_cb=progress_cb)
+            if final_paths:
+                self.transcribe_finished.emit(self.url)
         self.finished_signal.emit(exit_code)  # 終了シグナル送信
 
 class AutoCheckWorker(QtCore.QObject):  # 自動監視ワーカー定義

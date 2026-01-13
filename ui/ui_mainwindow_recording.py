@@ -426,102 +426,155 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         timer.stop()
         self._update_recording_duration_label()
 
+    def _ensure_processing_popup(self, url: str) -> dict:
+        popups = getattr(self, "_processing_popups", None)
+        if not isinstance(popups, dict):
+            popups = {}
+            self._processing_popups = popups
+        dialog = popups.get(url)
+        if isinstance(dialog, dict):
+            return dialog
+        dialog_widget = QtWidgets.QDialog(self)
+        dialog_widget.setWindowTitle("変換中")
+        dialog_widget.setWindowModality(QtCore.Qt.WindowModality.NonModal)
+        layout = QtWidgets.QVBoxLayout(dialog_widget)
+        layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        conversion_label = QtWidgets.QLabel("変換: 0%")
+        conversion_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        conversion_bar = QtWidgets.QProgressBar()
+        conversion_bar.setRange(0, 100)
+        conversion_bar.setValue(0)
+        conversion_bar.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        transcribe_label = QtWidgets.QLabel("文字起こし: 0%")
+        transcribe_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        transcribe_bar = QtWidgets.QProgressBar()
+        transcribe_bar.setRange(0, 100)
+        transcribe_bar.setValue(0)
+        transcribe_bar.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        conversion_label.setVisible(False)
+        conversion_bar.setVisible(False)
+        transcribe_label.setVisible(False)
+        transcribe_bar.setVisible(False)
+        layout.addWidget(conversion_label)
+        layout.addWidget(conversion_bar)
+        layout.addWidget(transcribe_label)
+        layout.addWidget(transcribe_bar)
+        dialog_widget.show()
+        state = {
+            "dialog": dialog_widget,
+            "conversion_label": conversion_label,
+            "conversion_bar": conversion_bar,
+            "transcribe_label": transcribe_label,
+            "transcribe_bar": transcribe_bar,
+            "conversion_active": False,
+        }
+        popups[url] = state
+        return state
+
     def _on_conversion_started(self, url: str) -> None:
         if not url:
             return
-        popups = getattr(self, "_conversion_popups", None)
-        if not isinstance(popups, dict):
-            popups = {}
-            self._conversion_popups = popups
-        if url in popups:
-            return
-        dialog = QtWidgets.QProgressDialog("動画を変換中です...", "", 0, 0, self)
+        state = self._ensure_processing_popup(url)
+        dialog = state["dialog"]
         dialog.setWindowTitle("変換中")
-        dialog.setWindowModality(QtCore.Qt.WindowModality.NonModal)
-        dialog.setCancelButton(None)
-        dialog.setAutoClose(False)
-        dialog.setAutoReset(False)
-        dialog.setMinimumDuration(0)
-        layout = dialog.layout()
-        if layout is not None:
-            layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        label = dialog.findChild(QtWidgets.QLabel)
-        if isinstance(label, QtWidgets.QLabel):
-            label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        bar = dialog.findChild(QtWidgets.QProgressBar)
-        if isinstance(bar, QtWidgets.QProgressBar):
-            bar.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        state["conversion_active"] = True
+        state["conversion_label"].setVisible(True)
+        state["conversion_bar"].setVisible(True)
+        state["conversion_label"].setText("変換: 0%")
+        state["conversion_bar"].setValue(0)
         dialog.show()
-        popups[url] = dialog
+
+    def _on_conversion_progress(self, url: str, percent: int) -> None:
+        popups = getattr(self, "_processing_popups", None)
+        if not isinstance(popups, dict):
+            return
+        state = popups.get(url)
+        if not isinstance(state, dict):
+            return
+        safe_percent = max(0, min(100, int(percent)))
+        if not state.get("conversion_active"):
+            state["conversion_active"] = True
+            state["conversion_label"].setVisible(True)
+            state["conversion_bar"].setVisible(True)
+        state["conversion_bar"].setValue(safe_percent)
+        state["conversion_label"].setText(f"変換: {safe_percent}%")
 
     def _on_watermark_started(self, url: str) -> None:
         if not url:
             return
-        popups = getattr(self, "_conversion_popups", None)
-        if not isinstance(popups, dict):
-            popups = {}
-            self._conversion_popups = popups
-        dialog = popups.get(url)
-        if isinstance(dialog, QtWidgets.QProgressDialog):
-            dialog.setWindowTitle("透かし合成中")
-            dialog.setLabelText("透かしを合成中です...")
-            return
-        dialog = QtWidgets.QProgressDialog("透かしを合成中です...", "", 0, 0, self)
-        dialog.setWindowTitle("透かし合成中")
-        dialog.setWindowModality(QtCore.Qt.WindowModality.NonModal)
-        dialog.setCancelButton(None)
-        dialog.setAutoClose(False)
-        dialog.setAutoReset(False)
-        dialog.setMinimumDuration(0)
-        layout = dialog.layout()
-        if layout is not None:
-            layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        label = dialog.findChild(QtWidgets.QLabel)
-        if isinstance(label, QtWidgets.QLabel):
-            label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        bar = dialog.findChild(QtWidgets.QProgressBar)
-        if isinstance(bar, QtWidgets.QProgressBar):
-            bar.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        dialog.show()
-        popups[url] = dialog
+        state = self._ensure_processing_popup(url)
+        state["conversion_active"] = True
+        state["conversion_label"].setVisible(True)
+        state["conversion_bar"].setVisible(True)
+        state["dialog"].setWindowTitle("変換中")
 
     def _on_compression_started(self, url: str) -> None:
         if not url:
             return
-        popups = getattr(self, "_conversion_popups", None)
-        if not isinstance(popups, dict):
-            popups = {}
-            self._conversion_popups = popups
-        dialog = popups.get(url)
-        if isinstance(dialog, QtWidgets.QProgressDialog):
-            dialog.setWindowTitle("変換/圧縮中")
-            dialog.setLabelText("動画を変換/圧縮中です...")
-            return
-        dialog = QtWidgets.QProgressDialog("動画を圧縮中です...", "", 0, 0, self)
-        dialog.setWindowTitle("圧縮中")
-        dialog.setWindowModality(QtCore.Qt.WindowModality.NonModal)
-        dialog.setCancelButton(None)
-        dialog.setAutoClose(False)
-        dialog.setAutoReset(False)
-        dialog.setMinimumDuration(0)
-        layout = dialog.layout()
-        if layout is not None:
-            layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        label = dialog.findChild(QtWidgets.QLabel)
-        if isinstance(label, QtWidgets.QLabel):
-            label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        bar = dialog.findChild(QtWidgets.QProgressBar)
-        if isinstance(bar, QtWidgets.QProgressBar):
-            bar.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        dialog.show()
-        popups[url] = dialog
+        state = self._ensure_processing_popup(url)
+        state["conversion_active"] = True
+        state["conversion_label"].setVisible(True)
+        state["conversion_bar"].setVisible(True)
+        state["dialog"].setWindowTitle("変換中")
 
-    def _close_conversion_popup(self, url: str) -> None:
-        popups = getattr(self, "_conversion_popups", None)
+    def _on_transcribe_started(self, url: str) -> None:
+        if not url:
+            return
+        state = self._ensure_processing_popup(url)
+        dialog = state["dialog"]
+        title = "変換/文字起こし中" if state.get("conversion_active") else "文字起こし中"
+        dialog.setWindowTitle(title)
+        state["transcribe_label"].setVisible(True)
+        state["transcribe_bar"].setVisible(True)
+        state["transcribe_label"].setText("文字起こし: 0%")
+        state["transcribe_bar"].setValue(0)
+        dialog.show()
+
+    def _on_transcribe_progress(self, url: str, percent: int) -> None:
+        popups = getattr(self, "_processing_popups", None)
         if not isinstance(popups, dict):
             return
-        dialog = popups.pop(url, None)
-        if isinstance(dialog, QtWidgets.QProgressDialog):
+        state = popups.get(url)
+        if not isinstance(state, dict):
+            return
+        safe_percent = max(0, min(100, int(percent)))
+        state["transcribe_bar"].setValue(safe_percent)
+        state["transcribe_label"].setText(f"文字起こし: {safe_percent}%")
+
+    def _on_transcribe_finished(self, url: str) -> None:
+        popups = getattr(self, "_processing_popups", None)
+        if not isinstance(popups, dict):
+            return
+        state = popups.get(url)
+        if not isinstance(state, dict):
+            return
+        state["transcribe_bar"].setValue(100)
+        state["transcribe_label"].setText("文字起こし: 100%")
+
+    def _on_conversion_finished(self, url: str) -> None:
+        popups = getattr(self, "_processing_popups", None)
+        if not isinstance(popups, dict):
+            return
+        state = popups.get(url)
+        if not isinstance(state, dict):
+            return
+        state["conversion_active"] = True
+        state["conversion_label"].setVisible(True)
+        state["conversion_bar"].setVisible(True)
+        state["conversion_bar"].setValue(100)
+        state["conversion_label"].setText("変換: 100%")
+        if not load_bool_setting("transcribe_enabled", False):
+            self._close_processing_popup(url)
+
+    def _close_processing_popup(self, url: str) -> None:
+        popups = getattr(self, "_processing_popups", None)
+        if not isinstance(popups, dict):
+            return
+        state = popups.pop(url, None)
+        if not isinstance(state, dict):
+            return
+        dialog = state.get("dialog")
+        if isinstance(dialog, QtWidgets.QDialog):
             dialog.close()
             dialog.deleteLater()
 
@@ -795,9 +848,13 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         thread.started.connect(worker.run)  # 開始イベント接続
         worker.log_signal.connect(self._append_log)  # ログ接続
         worker.conversion_started.connect(self._on_conversion_started)
+        worker.conversion_progress.connect(self._on_conversion_progress)
         worker.watermark_started.connect(self._on_watermark_started)
         worker.compression_started.connect(self._on_compression_started)
-        worker.compression_finished.connect(self._close_conversion_popup)
+        worker.compression_finished.connect(self._on_conversion_finished)
+        worker.transcribe_started.connect(self._on_transcribe_started)
+        worker.transcribe_progress.connect(self._on_transcribe_progress)
+        worker.transcribe_finished.connect(self._on_transcribe_finished)
         worker.finished_signal.connect(  # 終了イベント接続
             lambda exit_code, record_url=normalized_url: self._on_auto_recording_finished(record_url, exit_code)  # 終了処理
         )  # イベント接続の終了
@@ -846,7 +903,7 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
             if worker is not None:  # ワーカーが存在する場合
                 worker.deleteLater()  # ワーカーを破棄
         self._append_log(f"自動録画終了: {url}（終了コード: {exit_code}）")  # ログ出力
-        self._close_conversion_popup(url)
+        self._close_processing_popup(url)
         self._stop_preview_for_url(url, remove_tab=True)  # 自動録画のプレビューを停止
         if not self.auto_sessions and self.stop_event is None:  # 録画が無い場合
             self.stop_button.setEnabled(False)  # 停止ボタンを無効化
@@ -928,9 +985,13 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
         self.worker_thread.started.connect(self.worker.run)  # 開始イベント接続
         self.worker.log_signal.connect(self._append_log)  # ログ接続
         self.worker.conversion_started.connect(self._on_conversion_started)
+        self.worker.conversion_progress.connect(self._on_conversion_progress)
         self.worker.watermark_started.connect(self._on_watermark_started)
         self.worker.compression_started.connect(self._on_compression_started)
-        self.worker.compression_finished.connect(self._close_conversion_popup)
+        self.worker.compression_finished.connect(self._on_conversion_finished)
+        self.worker.transcribe_started.connect(self._on_transcribe_started)
+        self.worker.transcribe_progress.connect(self._on_transcribe_progress)
+        self.worker.transcribe_finished.connect(self._on_transcribe_finished)
         self.worker.finished_signal.connect(self._on_recording_finished)  # 終了イベント接続
         self.worker_thread.start()  # スレッド開始
         self.start_button.setEnabled(False)  # 開始ボタン無効化
@@ -1008,7 +1069,7 @@ class MainWindowRecordingMixin:  # MainWindowRecordingMixin定義
     def _on_recording_finished(self, exit_code: int) -> None:  # 録画終了処理
         self._append_log(f"録画終了（終了コード: {exit_code}）")  # ログ出力
         if self.manual_recording_url:  # 手動録画URLがある場合
-            self._close_conversion_popup(self.manual_recording_url)
+            self._close_processing_popup(self.manual_recording_url)
             self._stop_preview_for_url(self.manual_recording_url, remove_tab=True)  # 手動録画のプレビューを停止
         self.manual_recording_url = None  # 手動録画URLをクリア
         self.manual_recording_path = None  # 手動録画パスをクリア
