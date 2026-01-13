@@ -478,6 +478,24 @@ class SettingsPagesMixin:
         self.watermark_open_dialog_button.clicked.connect(self._open_watermark_dialog)
         self._add_input_card(layout, "透かし詳細", self.watermark_open_dialog_button, "プレビュー付きの専用ウィンドウを開きます。")
 
+        self._add_section_label(layout, "文字起こし")
+        self.transcribe_enabled_input = ToggleSwitch()
+        self.transcribe_enabled_input.toggled.connect(self._update_transcribe_option_state)
+        self._add_card(
+            layout,
+            "録画後に文字起こし",
+            self.transcribe_enabled_input,
+            "録画後にWhisperで文字起こしを実行します。",
+        )
+        self.transcribe_model_input = QtWidgets.QComboBox()
+        self.transcribe_model_input.addItems(["tiny", "base", "small", "medium", "large"])
+        self._add_input_card(
+            layout,
+            "モデル",
+            self.transcribe_model_input,
+            "高速化したい場合は小さいモデルを選択してください。",
+        )
+
         layout.addStretch(1)
         return page
 

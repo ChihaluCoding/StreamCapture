@@ -16,6 +16,7 @@ from core.recording import (
     compress_recording,
     normalize_output_format,
     record_stream,
+    transcribe_recording,
 )  # 録画処理を読み込み
 from utils.streamlink_utils import (  # Streamlinkヘッダー調整
     apply_streamlink_options_for_url,  # URL別オプション調整
@@ -110,6 +111,10 @@ class RecorderWorker(QtCore.QObject):  # 録画ワーカー定義
                 compressed_path = compress_recording(converted_path, status_cb=status_cb)
                 final_paths.append(compressed_path or converted_path)
             self.compression_finished.emit(self.url)
+        if load_bool_setting("transcribe_enabled", False):
+            model = load_setting_value("transcribe_model", "small", str)
+            for final_path in final_paths:
+                transcribe_recording(final_path, model, status_cb=status_cb)
         self.finished_signal.emit(exit_code)  # 終了シグナル送信
 
 class AutoCheckWorker(QtCore.QObject):  # 自動監視ワーカー定義

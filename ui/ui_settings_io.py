@@ -344,6 +344,12 @@ class SettingsIOMixin:
         self.auto_compress_audio_bitrate_input.setValue(load_setting_value("auto_compress_audio_bitrate_kbps", 128, int))
         self.auto_compress_keep_original_input.setChecked(load_bool_setting("auto_compress_keep_original", True))
         self.watermark_enabled_input.setChecked(load_bool_setting("watermark_enabled", False))
+        self.transcribe_enabled_input.setChecked(load_bool_setting("transcribe_enabled", False))
+        model = load_setting_value("transcribe_model", "small", str).lower()
+        model_index = self.transcribe_model_input.findText(model, QtCore.Qt.MatchFlag.MatchFixedString)
+        if model_index < 0:
+            model_index = self.transcribe_model_input.findText("small", QtCore.Qt.MatchFlag.MatchFixedString)
+        self.transcribe_model_input.setCurrentIndex(max(0, model_index))
         self.timeshift_segment_hours_input.setValue(
             load_setting_value("timeshift_segment_hours", DEFAULT_TIMESHIFT_SEGMENT_HOURS, int)
         )
@@ -399,6 +405,7 @@ class SettingsIOMixin:
             backend_index = self.youtube_backend_input.findData(DEFAULT_YOUTUBE_RECORDING_BACKEND)
         self.youtube_backend_input.setCurrentIndex(max(0, backend_index))
         self._update_auto_compress_option_state(bool(self.auto_compress_enabled_input.isChecked()))
+        self._update_transcribe_option_state(bool(self.transcribe_enabled_input.isChecked()))
 
     def _save_settings(self) -> None:
         save_setting_value("output_dir", self.output_dir_input.text().strip())
@@ -437,6 +444,8 @@ class SettingsIOMixin:
         save_setting_value("auto_compress_audio_bitrate_kbps", int(self.auto_compress_audio_bitrate_input.value()))
         save_setting_value("auto_compress_keep_original", int(self.auto_compress_keep_original_input.isChecked()))
         save_setting_value("watermark_enabled", int(self.watermark_enabled_input.isChecked()))
+        save_setting_value("transcribe_enabled", int(self.transcribe_enabled_input.isChecked()))
+        save_setting_value("transcribe_model", str(self.transcribe_model_input.currentText()))
         save_setting_value("timeshift_segment_hours", int(self.timeshift_segment_hours_input.value()))
         save_setting_value("timeshift_segment_minutes", int(self.timeshift_segment_minutes_input.value()))
         save_setting_value("timeshift_segment_seconds", int(self.timeshift_segment_seconds_input.value()))
@@ -526,3 +535,6 @@ class SettingsIOMixin:
         ]
         for widget in widgets:
             widget.setEnabled(True)
+
+    def _update_transcribe_option_state(self, enabled: bool) -> None:
+        self.transcribe_model_input.setEnabled(enabled)

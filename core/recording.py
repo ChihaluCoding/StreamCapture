@@ -54,6 +54,73 @@ def find_ffmpeg_path() -> Optional[str]:  # ffmpegのパスを解決
         return str(preferred)
     return shutil.which("ffmpeg")  # PATHを検索
 
+def find_whisper_path() -> Optional[str]:  # Whisper CLIのパスを解決
+    for name in ("whisper", "whisper.exe"):
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
+
+def transcribe_recording(  # 録画後の文字起こし
+    input_path: Path,
+    model: str,
+    status_cb: Optional[Callable[[str], None]] = None,
+) -> Optional[Path]:
+    if not input_path.exists():
+        message = f"文字起こし対象ファイルが存在しません: {input_path}"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    whisper_path = find_whisper_path()
+    if not whisper_path:
+        message = "文字起こしにはWhisper CLIが必要です。'pip install -U openai-whisper' を実行してください。"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    output_path = input_path.with_suffix(".srt")
+    if output_path.exists():
+        if status_cb is not None:
+            status_cb(f"文字起こし結果が既に存在するためスキップします: {output_path}")
+        return output_path
+    safe_model = (model or "small").strip() or "small"
+    command = [
+        whisper_path,
+        str(input_path),
+        "--model",
+        safe_model,
+        "--task",
+        "transcribe",
+        "--output_format",
+        "srt",
+        "--output_dir",
+        str(output_path.parent),
+        "--fp16",
+        "False",
+    ]
+    if status_cb is not None:
+        status_cb(f"文字起こしを開始します: {output_path}")
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode != 0:
+        stderr_text = "\n".join(result.stderr.strip().splitlines()[-15:]) if result.stderr else "詳細不明"
+        message = f"文字起こしに失敗しました: {stderr_text}"
+        if status_cb is not None:
+            status_cb(message)
+        return None
+    if output_path.exists():
+        if status_cb is not None:
+            status_cb(f"文字起こしが完了しました: {output_path}")
+        return output_path
+    if status_cb is not None:
+        status_cb("文字起こしの出力が見つかりませんでした。")
+    return None
+
 def _has_valid_extension(name: str) -> bool:  # 拡張子の妥当性確認
     suffix = Path(name).suffix
     return bool(re.match(r"^\.[A-Za-z0-9]{1,5}$", suffix))
