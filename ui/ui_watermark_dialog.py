@@ -15,7 +15,8 @@ class WatermarkDialog(QtWidgets.QDialog):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("透かし設定")
-        self.resize(1100, 720)
+        self.resize(1720, 880)
+        self.setMinimumSize(980, 560)
         self._sample_source_pixmap: QtGui.QPixmap | None = None
         self._sample_source_size = QtCore.QSize()
         self._temp_dir = tempfile.TemporaryDirectory()
@@ -46,12 +47,12 @@ class WatermarkDialog(QtWidgets.QDialog):
             layout.addWidget(line)
 
         layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(16)
 
         self.preview_frame = QtWidgets.QFrame()
         self.preview_frame.setObjectName("WatermarkPreview")
-        self.preview_frame.setMinimumSize(740, 520)
+        self.preview_frame.setMinimumSize(700, 360)
         preview_layout = QtWidgets.QVBoxLayout(self.preview_frame)
         preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_layout.setSpacing(0)
@@ -73,25 +74,23 @@ class WatermarkDialog(QtWidgets.QDialog):
 
         self.control_frame = QtWidgets.QFrame()
         self.control_frame.setObjectName("WatermarkControls")
-        self.control_frame.setFixedWidth(300)
+        self.control_frame.setMinimumWidth(320)
         control_layout = QtWidgets.QVBoxLayout(self.control_frame)
-        control_layout.setContentsMargins(16, 16, 16, 16)
+        control_layout.setContentsMargins(18, 18, 18, 18)
         control_layout.setSpacing(12)
 
         control_layout.addWidget(section_label("プレビュー"))
         self.preview_source_input = QtWidgets.QLineEdit()
         self.preview_source_input.textChanged.connect(self._load_preview_source)
         self.preview_source_browse = QtWidgets.QPushButton("参照")
+        self.preview_source_browse.setAutoDefault(False)
+        self.preview_source_browse.setDefault(False)
         self.preview_source_browse.clicked.connect(self._browse_preview_source)
         preview_row = QtWidgets.QHBoxLayout()
         preview_row.addWidget(self.preview_source_input, 1)
         preview_row.addWidget(self.preview_source_browse, 0)
         control_layout.addWidget(field_label("サンプルファイル"))
         control_layout.addLayout(preview_row)
-        self.exact_preview_toggle = QtWidgets.QCheckBox("正確プレビューを自動更新")
-        self.exact_preview_toggle.toggled.connect(self._on_exact_preview_toggled)
-        control_layout.addWidget(self.exact_preview_toggle)
-
         add_divider(control_layout)
         control_layout.addWidget(section_label("タイプ"))
         self.mode_input = QtWidgets.QComboBox()
@@ -108,6 +107,8 @@ class WatermarkDialog(QtWidgets.QDialog):
         self.image_path_input.textChanged.connect(self._update_preview_overlay)
         self.image_path_input.textChanged.connect(self._on_setting_changed)
         self.image_browse = QtWidgets.QPushButton("参照")
+        self.image_browse.setAutoDefault(False)
+        self.image_browse.setDefault(False)
         self.image_browse.clicked.connect(self._browse_image_file)
         image_row = QtWidgets.QHBoxLayout()
         image_row.addWidget(self.image_path_input, 1)
@@ -185,13 +186,20 @@ class WatermarkDialog(QtWidgets.QDialog):
         self.btn_save = QtWidgets.QPushButton("保存")
         self.btn_save.setObjectName("PrimaryButton")
         self.btn_save.setDefault(True)
+        self.btn_close.setAutoDefault(False)
         self.btn_close.clicked.connect(self.reject)
         self.btn_save.clicked.connect(self._save_settings)
         button_row.addWidget(self.btn_close)
         button_row.addWidget(self.btn_save)
         control_layout.addLayout(button_row)
 
-        layout.addWidget(self.control_frame, 0)
+        control_scroll = QtWidgets.QScrollArea()
+        control_scroll.setWidgetResizable(True)
+        control_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        control_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        control_scroll.setFixedWidth(340)
+        control_scroll.setWidget(self.control_frame)
+        layout.addWidget(control_scroll, 0)
 
         self.setStyleSheet("")
 
@@ -282,30 +290,30 @@ class WatermarkDialog(QtWidgets.QDialog):
 
     def _apply_style(self) -> None:
         if self._is_dark_mode():
-            c_dialog_bg = "#0f1117"
-            c_panel_bg = "#111827"
-            c_panel_border = "#1f2937"
+            c_dialog_bg = "#0e1118"
+            c_panel_bg = "#0f172a"
+            c_panel_border = "#1e293b"
             c_preview_bg = "#0b1220"
-            c_preview_bg_alt = "#111827"
-            c_label = "#cbd5e1"
-            c_section = "#e2e8f0"
+            c_preview_bg_alt = "#0f172a"
+            c_label = "#e2e8f0"
+            c_section = "#f8fafc"
             c_field = "#94a3b8"
-            c_input_bg = "#0f172a"
+            c_input_bg = "#0b1220"
             c_input_text = "#e2e8f0"
-            c_input_border = "#1f2937"
+            c_input_border = "#243041"
             c_focus = "#38bdf8"
-            c_button_bg = "#0f172a"
+            c_button_bg = "#0b1220"
             c_button_text = "#e2e8f0"
             c_primary_bg = "#38bdf8"
             c_primary_border = "#0ea5e9"
-            c_primary_text = "#0b1220"
+            c_primary_text = "#07111f"
         else:
-            c_dialog_bg = "#f8fafc"
+            c_dialog_bg = "#f1f5f9"
             c_panel_bg = "#ffffff"
             c_panel_border = "#e2e8f0"
-            c_preview_bg = "#f1f5f9"
+            c_preview_bg = "#eef2f7"
             c_preview_bg_alt = "#e2e8f0"
-            c_label = "#334155"
+            c_label = "#1f2937"
             c_section = "#0f172a"
             c_field = "#64748b"
             c_input_bg = "#ffffff"
@@ -324,31 +332,35 @@ class WatermarkDialog(QtWidgets.QDialog):
             QFrame#WatermarkPreview {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {c_preview_bg}, stop:1 {c_preview_bg_alt});
                 border: 1px solid {c_panel_border};
-                border-radius: 6px;
+                border-radius: 10px;
             }}
             QFrame#WatermarkControls {{
                 background: {c_panel_bg};
                 border: 1px solid {c_panel_border};
-                border-radius: 6px;
+                border-radius: 10px;
             }}
             QLabel {{ color: {c_label}; }}
-            QLabel#SectionLabel {{ color: {c_section}; font-size: 13px; font-weight: 600; padding-top: 6px; }}
+            QLabel#SectionLabel {{ color: {c_section}; font-size: 14px; font-weight: 700; padding-top: 4px; }}
             QLabel#FieldLabel {{ color: {c_field}; font-size: 12px; }}
-            QFrame#SectionDivider {{ background: {c_panel_border}; }}
+            QFrame#SectionDivider {{ background: {c_panel_border}; margin: 4px 0 2px 0; }}
             QLineEdit, QComboBox {{
                 background: {c_input_bg};
                 color: {c_input_text};
                 border: 1px solid {c_input_border};
-                padding: 6px 8px;
-                border-radius: 6px;
+                padding: 7px 10px;
+                border-radius: 8px;
             }}
             QLineEdit:focus, QComboBox:focus {{ border: 1px solid {c_focus}; }}
+            QCheckBox {{
+                spacing: 8px;
+                color: {c_label};
+            }}
             QPushButton {{
                 background: {c_button_bg};
                 color: {c_button_text};
                 border: 1px solid {c_input_border};
-                padding: 6px 12px;
-                border-radius: 6px;
+                padding: 7px 14px;
+                border-radius: 8px;
             }}
             QPushButton:hover {{ border: 1px solid {c_focus}; }}
             QPushButton#PrimaryButton {{
@@ -580,6 +592,7 @@ class WatermarkDialog(QtWidgets.QDialog):
         self._sample_source_pixmap = frame_pixmap
         self._update_preview_pixmap()
         self._update_preview_overlay()
+        self._exact_preview_timer.start(200)
 
     def _render_exact_preview(self) -> None:
         if not self._preview_source_path or not self._preview_source_path.exists():
@@ -726,19 +739,4 @@ class WatermarkDialog(QtWidgets.QDialog):
                 self._update_preview_pixmap()
                 self._update_preview_overlay()
             return
-        if not self.exact_preview_toggle.isChecked():
-            if self._composite_preview:
-                self._composite_preview = False
-            self._update_preview_pixmap()
-            self._update_preview_overlay()
-            return
         self._exact_preview_timer.start(300)
-
-    def _on_exact_preview_toggled(self, enabled: bool) -> None:
-        if not enabled:
-            self._composite_preview = False
-            self._update_preview_pixmap()
-            self._update_preview_overlay()
-            return
-        if self._preview_source_path and self._preview_source_path.exists():
-            self._exact_preview_timer.start(100)

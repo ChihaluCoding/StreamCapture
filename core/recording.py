@@ -182,13 +182,15 @@ def _apply_text_watermark(
     fontcolor = f"white@{opacity:.2f}"
     position = load_setting_value("watermark_position", "br", str).strip().lower() or "br"
     if random_enabled:
+        seed = int(time.time())
+        t_expr = f"(floor(t/{interval})+{seed})"
         x_expr = (
             f"{margin}+max(0\\,w-tw-2*{margin})*"
-            f"mod(mod(sin((floor(t/{interval})+1)*12.9898)*43758.5453\\,1)+1\\,1)"
+            f"mod(({t_expr})*0.7548776662466927 + ({t_expr})*0.00337\\,1)"
         )
         y_expr = (
             f"{margin}+max(0\\,h-th-2*{margin})*"
-            f"mod(mod(sin((floor(t/{interval})+1)*78.233)*12515.8733\\,1)+1\\,1)"
+            f"mod(({t_expr})*0.5698402909980532 + ({t_expr})*0.00731\\,1)"
         )
     else:
         if position == "tl":
@@ -208,7 +210,7 @@ def _apply_text_watermark(
         f"[base]drawtext=text='{escaped_text}':"
         f"x={x_expr}:y={y_expr}:"
         f"fontsize=trunc(w*{size_ratio}):"
-        f"fontcolor={fontcolor}:borderw=2:bordercolor=black@0.6[v]"
+        f"fontcolor={fontcolor}[v]"
     )
     temp_output = ensure_unique_path(
         output_path.with_name(f"{output_path.stem}_watermark_tmp{output_path.suffix}")
@@ -322,13 +324,15 @@ def _apply_watermark(  # 透かし合成
     scale_ratio = max(0.01, min(1.0, scale_percent / 100.0))
     position = load_setting_value("watermark_position", "br", str).strip().lower() or "br"
     if random_enabled:
+        seed = int(time.time())
+        t_expr = f"(floor(t/{interval})+{seed})"
         x_expr = (
             f"{margin}+max(0\\,W-w-2*{margin})*"
-            f"mod(mod(sin((floor(t/{interval})+1)*12.9898)*43758.5453\\,1)+1\\,1)"
+            f"mod(({t_expr})*0.7548776662466927 + ({t_expr})*0.00337\\,1)"
         )
         y_expr = (
             f"{margin}+max(0\\,H-h-2*{margin})*"
-            f"mod(mod(sin((floor(t/{interval})+1)*78.233)*12515.8733\\,1)+1\\,1)"
+            f"mod(({t_expr})*0.5698402909980532 + ({t_expr})*0.00731\\,1)"
         )
     else:
         if position == "tl":

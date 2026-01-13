@@ -263,8 +263,8 @@ class MainWindowLayoutMixin:
         font_mono = '"Consolas", "Monaco", monospace'  # 等幅フォントは既存を維持
 
         self.setStyleSheet(f"""
-            /* 全体のリセット */
-            QWidget {{
+            /* 全体のリセット (メニュー系はOS標準に寄せる) */
+            QWidget#CentralWidget, QWidget#CentralWidget * {{
                 font-family: {font_main};
                 color: {c_text};
                 font-size: 14px;
